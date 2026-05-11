@@ -14,7 +14,7 @@ const CATEGORIES = ["snack", "drink", "other"];
 
 export default function InventoryPage() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "cafe_admin";
+  const isAdmin = user?.role === "CAFE_ADMIN";
   const [items, setItems] = useState([]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);

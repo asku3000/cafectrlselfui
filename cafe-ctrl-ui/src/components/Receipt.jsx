@@ -47,7 +47,7 @@ export default function Receipt({ session, cafe, forceVisible = false }) {
         <div key={g.game_session_id} style={{ marginBottom: 6 }}>
           <div className="b">{g.resource_name} — {g.game_type_name}</div>
           <div style={{ fontSize: 10 }}>
-            {fmtDuration(minutesBetween(g.start_time, g.end_time))} billable
+            {fmtDuration(minutesBetween(g.start_time, g.end_time))} billable · {(g.charge?.player_count || 1)}P
           </div>
           {(g.charge.applied_grouped || []).map((s, i) => (
             <div className="r-line" key={i} style={{ fontSize: 10 }}>
@@ -89,7 +89,7 @@ export function buildReceiptText(session, cafe) {
   L.push(`Customer: ${session.customer_name}`);
   L.push("─────────────");
   (bill.games || []).forEach((g) => {
-    L.push(`${g.resource_name} (${g.game_type_name})`);
+    L.push(`${g.resource_name} (${g.game_type_name}) · ${(g.charge?.player_count || 1)}P`);
     L.push(`  ${fmtDuration(minutesBetween(g.start_time, g.end_time))} → ${fmtMoney(g.charge.amount)}`);
     (g.items || []).forEach((it) => L.push(`  + ${it.name} × ${it.qty} = ${fmtMoney(it.total)}`));
   });

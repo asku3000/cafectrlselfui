@@ -15,10 +15,23 @@ import DateTimePicker from "../components/DateTimePicker";
 export default function SessionsListPage() {
   const [resources, setResources] = useState([]);
   const [active, setActive] = useState([]);
+  const [rateCards, setRateCards] = useState([]);
   const [openNew, setOpenNew] = useState(false);
   const [muted, setMutedState] = useState(ensureMutedFlag());
-  const [form, setForm] = useState({ customer_name: "", customer_phone: "", resource_id: "", start_time: toLocalInput() });
+  const [form, setForm] = useState({ customer_name: "", customer_phone: "", resource_id: "", player_count: 1, start_time: toLocalInput() });
   const notifiedRef = useRef(new Set());
+
+  // Map resource_id -> rate card (for player_counts options)
+  const rcByResource = (rid) => {
+    const r = resources.find((x) => x.id === rid);
+    if (!r) return null;
+    return rateCards.find((c) => c.id === r.rate_card_id) || null;
+  };
+  const playerCountsFor = (rid) => {
+    const rc = rcByResource(rid);
+    const pcs = Array.isArray(rc?.player_counts) ? rc.player_counts.map(Number).filter((n) => Number.isFinite(n)) : [];
+    return pcs.length ? Array.from(new Set(pcs)).sort((a, b) => a - b) : [1];
+  };
 
   // Ask for browser-notification permission once
   useEffect(() => { ensureNotificationPermission(); }, []);
@@ -27,8 +40,8 @@ export default function SessionsListPage() {
 
   const load = async () => {
     try {
-      const [r, a] = await Promise.all([api.get("/resources"), api.get("/sessions/active")]);
-      setResources(r.data); setActive(a.data);
+      const [r, a, rc] = await Promise.all([api.get("/resources"), api.get("/sessions/active"), api.get("/rate-cards")]);
+      setResources(r.data); setActive(a.data); setRateCards(rc.data);
     } catch (e) { toast.error(formatApiError(e)); }
   };
   useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, []);
@@ -64,13 +77,20 @@ export default function SessionsListPage() {
   }, [active]);
 
   const openStart = (resource_id) => {
-    setForm({ customer_name: "", customer_phone: "", resource_id, start_time: toLocalInput() });
+    const pcs = playerCountsFor(resource_id);
+    setForm({ customer_name: "", customer_phone: "", resource_id, player_count: pcs[0] || 1, start_time: toLocalInput() });
     setOpenNew(true);
   };
   const start = async () => {
     try {
       if (!form.customer_name || !form.resource_id) return toast.error("Customer name & resource required");
-      await api.post("/sessions", { ...form, start_time: fromLocalInput(form.start_time) });
+      await api.post("/sessions", {
+        customer_name: form.customer_name,
+        customer_phone: form.customer_phone,
+        resource_id: form.resource_id,
+        player_count: Number(form.player_count) || 1,
+        start_time: fromLocalInput(form.start_time),
+      });
       setOpenNew(false); load(); toast.success("Session started");
     } catch (e) { toast.error(formatApiError(e)); }
   };
@@ -162,9 +182,23 @@ export default function SessionsListPage() {
             <div><Label>Phone</Label><Input value={form.customer_phone} onChange={e => setForm(f => ({ ...f, customer_phone: e.target.value }))} data-testid="new-cust-phone"/></div>
             <div>
               <Label>Resource</Label>
-              <Select value={form.resource_id} onValueChange={v => setForm(f => ({ ...f, resource_id: v }))}>
+              <Select value={form.resource_id} onValueChange={v => {
+                const pcs = playerCountsFor(v);
+                setForm(f => ({ ...f, resource_id: v, player_count: pcs[0] || 1 }));
+              }}>
                 <SelectTrigger data-testid="new-cust-resource"><SelectValue placeholder="Select"/></SelectTrigger>
                 <SelectContent>{resources.filter(r => !r.active).map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Number of Players</Label>
+              <Select value={String(form.player_count)} onValueChange={v => setForm(f => ({ ...f, player_count: Number(v) }))}>
+                <SelectTrigger data-testid="new-cust-players"><SelectValue/></SelectTrigger>
+                <SelectContent>
+                  {playerCountsFor(form.resource_id).map(pc => (
+                    <SelectItem key={pc} value={String(pc)}>{pc} player{pc > 1 ? "s" : ""}</SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
             <div>

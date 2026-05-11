@@ -25,7 +25,7 @@ export default function GameTypesPage() {
     catch (e) { toast.error(formatApiError(e)); }
   };
 
-  const presets = ["Pool", "PS5", "Xbox", "Air Hockey", "Foosball"].filter(p => !items.some(i => i.name.toLowerCase() === p.toLowerCase()));
+  const presets = ["Pool", "PS5", "Xbox", "Air Hockey", "Foosball", "Snooker"].filter(p => !items.some(i => i.name.toLowerCase() === p.toLowerCase()));
 
   return (
     <div className="space-y-6" data-testid="gametypes-root">

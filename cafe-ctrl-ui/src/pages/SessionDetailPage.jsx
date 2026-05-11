@@ -21,6 +21,7 @@ export default function SessionDetailPage() {
   const { cafe } = useAuth();
   const [sess, setSess] = useState(null);
   const [resources, setResources] = useState([]);
+  const [rateCards, setRateCards] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [accessories, setAccessories] = useState([]);
   const [bill, setBill] = useState(null);
@@ -29,27 +30,36 @@ export default function SessionDetailPage() {
   const [endGameOpen, setEndGameOpen] = useState(null);
   const [billingOpen, setBillingOpen] = useState(false);
 
-  const [newGame, setNewGame] = useState({ resource_id: "", start_time: toLocalInput() });
+  const [newGame, setNewGame] = useState({ resource_id: "", player_count: 1, start_time: toLocalInput() });
   const [endTime, setEndTime] = useState(toLocalInput());
   const [adjustment, setAdjustment] = useState(0);
   const [payments, setPayments] = useState([{ mode: "cash", amount: 0 }]);
   const [notes, setNotes] = useState("");
   const [itemPick, setItemPick] = useState({ open: false, gameId: null, type: "inventory", ref_id: "", qty: 1 });
 
-  const canBill = user?.role === "cafe_admin" || user?.permissions?.includes("billing");
+  const canBill = user?.role === "CAFE_ADMIN" || user?.permissions?.includes("billing");
 
   const load = async () => {
     try {
-      const [s, r, inv, acc] = await Promise.all([
+      const [s, r, inv, acc, rc] = await Promise.all([
         api.get(`/sessions/${id}`),
         api.get("/resources"),
         api.get("/inventory"),
         api.get("/accessories"),
+        api.get("/rate-cards"),
       ]);
-      setSess(s.data); setResources(r.data); setInventory(inv.data); setAccessories(acc.data);
+      setSess(s.data); setResources(r.data); setInventory(inv.data); setAccessories(acc.data); setRateCards(rc.data);
     } catch (e) { toast.error(formatApiError(e)); }
   };
   useEffect(() => { load(); const t = setInterval(load, 20000); return () => clearInterval(t); }, [id]);
+
+  const playerCountsFor = (rid) => {
+    const r = resources.find((x) => x.id === rid);
+    if (!r) return [1];
+    const rc = rateCards.find((c) => c.id === r.rate_card_id);
+    const pcs = Array.isArray(rc?.player_counts) ? rc.player_counts.map(Number).filter((n) => Number.isFinite(n)) : [];
+    return pcs.length ? Array.from(new Set(pcs)).sort((a, b) => a - b) : [1];
+  };
 
   const previewBill = async () => {
     try { const { data } = await api.get(`/sessions/${id}/bill`); setBill(data); setBillingOpen(true); setAdjustment(0); setPayments([{ mode: "cash", amount: data.grand_total }]); }
@@ -59,7 +69,11 @@ export default function SessionDetailPage() {
   const addGame = async () => {
     try {
       if (!newGame.resource_id) return toast.error("Pick a resource");
-      await api.post(`/sessions/${id}/games`, { resource_id: newGame.resource_id, start_time: fromLocalInput(newGame.start_time) });
+      await api.post(`/sessions/${id}/games`, {
+        resource_id: newGame.resource_id,
+        player_count: Number(newGame.player_count) || 1,
+        start_time: fromLocalInput(newGame.start_time),
+      });
       setAddGameOpen(false); load(); toast.success("Game added");
     } catch (e) { toast.error(formatApiError(e)); }
   };
@@ -77,8 +91,8 @@ export default function SessionDetailPage() {
       load(); toast.success("Item added");
     } catch (e) { toast.error(formatApiError(e)); }
   };
-  const removeItem = async (gameId, itemId) => {
-    try { await api.delete(`/sessions/${id}/games/${gameId}/items/${itemId}`); load(); } catch (e) { toast.error(formatApiError(e)); }
+  const removeItem = async (gameId, itemId, itemName) => {
+    try { await api.delete(`/sessions/${id}/games/${gameId}/items/${itemId}`); load(); toast.success(`Removed ${itemName}`); } catch (e) { toast.error(formatApiError(e)); }
   };
 
   const recalcBill = () => {
@@ -120,7 +134,7 @@ export default function SessionDetailPage() {
 
   const isBilled = sess.status === "billed";
   const isCancelled = sess.status === "cancelled";
-  const isAdmin = user?.role === "cafe_admin";
+  const isAdmin = user?.role === "CAFE_ADMIN";
   const totalMins = sess.games.reduce((a, g) => a + minutesBetween(g.start_time, g.end_time || new Date()), 0);
   const availableResources = resources.filter(r => !r.active && !sess.games.some(g => g.status === "active" && g.resource_id === r.id));
 
@@ -134,7 +148,7 @@ export default function SessionDetailPage() {
           <p className="text-muted-foreground mt-1">{sess.customer_phone || "—"} · started {fmtDateTime(sess.created_at)} · operator {sess.operator_name}</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          {!isBilled && !isCancelled && <Button variant="outline" onClick={() => { setNewGame({ resource_id: "", start_time: toLocalInput() }); setAddGameOpen(true); }} data-testid="add-game-btn"><Plus size={16}/> Add Game</Button>}
+          {!isBilled && !isCancelled && <Button variant="outline" onClick={() => { setNewGame({ resource_id: "", player_count: 1, start_time: toLocalInput() }); setAddGameOpen(true); }} data-testid="add-game-btn"><Plus size={16}/> Add Game</Button>}
           {!isBilled && !isCancelled && canBill && <Button onClick={previewBill} data-testid="bill-btn"><Receipt size={16}/> Bill</Button>}
           {!isBilled && !isCancelled && isAdmin && (
             <AlertDialog>
@@ -177,6 +191,11 @@ export default function SessionDetailPage() {
                   <div className="text-sm text-muted-foreground mt-1 font-mono">
                     {fmtDateTime(g.start_time)} → {g.end_time ? fmtDateTime(g.end_time) : "now"} · {fmtDuration(minutesBetween(g.start_time, g.end_time || new Date()))}
                   </div>
+                  <div className="mt-1">
+                    <span className="inline-flex items-center gap-1 bg-primary/10 text-primary rounded px-2 py-0.5 text-xs font-bold" data-testid={`game-players-${g.id}`}>
+                      {(g.player_count || 1)} player{(g.player_count || 1) > 1 ? "s" : ""}
+                    </span>
+                  </div>
                 </div>
                 <div className="flex gap-2 items-center">
                   <span className={`text-[0.65rem] uppercase tracking-widest font-bold px-2 py-1 rounded ${
@@ -197,13 +216,26 @@ export default function SessionDetailPage() {
               {g.items.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No snacks/accessories.</p>
               ) : (
-                <ul className="space-y-1">
+                <ul className="space-y-1.5">
                   {g.items.map(it => (
-                    <li key={it.id} className="flex justify-between text-sm">
-                      <span><span className="capitalize text-muted-foreground mr-2">[{it.type}]</span>{it.name} × {it.qty}</span>
-                      <span className="font-mono flex items-center gap-2">{fmtMoney(it.total)}
-                        {!isBilled && <Button size="icon" variant="ghost" onClick={() => removeItem(g.id, it.id)}><Trash size={14}/></Button>}
-                      </span>
+                    <li key={it.id} className="flex items-center justify-between gap-2 text-sm py-1 border-b border-border/50 last:border-0" data-testid={`item-row-${it.id}`}>
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <span className={`text-[0.6rem] uppercase tracking-widest font-bold px-1.5 py-0.5 rounded shrink-0 ${it.type === "inventory" ? "bg-emerald-500/15 text-emerald-500" : "bg-amber-500/15 text-amber-500"}`}>{it.type}</span>
+                        <span className="truncate"><span className="font-medium">{it.name}</span> <span className="text-muted-foreground">× {it.qty}</span></span>
+                      </div>
+                      <span className="font-mono shrink-0">{fmtMoney(it.total)}</span>
+                      {!isBilled && !isCancelled && (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive shrink-0"
+                          onClick={() => removeItem(g.id, it.id, it.name)}
+                          title="Remove item"
+                          data-testid={`remove-item-${it.id}`}
+                        >
+                          <Trash size={16} weight="bold" />
+                        </Button>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -236,9 +268,23 @@ export default function SessionDetailPage() {
           <div className="space-y-4">
             <div>
               <Label>Resource</Label>
-              <Select value={newGame.resource_id} onValueChange={v => setNewGame(f => ({ ...f, resource_id: v }))}>
+              <Select value={newGame.resource_id} onValueChange={v => {
+                const pcs = playerCountsFor(v);
+                setNewGame(f => ({ ...f, resource_id: v, player_count: pcs[0] || 1 }));
+              }}>
                 <SelectTrigger data-testid="add-game-res"><SelectValue placeholder="Select"/></SelectTrigger>
                 <SelectContent>{availableResources.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Number of Players</Label>
+              <Select value={String(newGame.player_count)} onValueChange={v => setNewGame(f => ({ ...f, player_count: Number(v) }))}>
+                <SelectTrigger data-testid="add-game-players"><SelectValue/></SelectTrigger>
+                <SelectContent>
+                  {playerCountsFor(newGame.resource_id).map(pc => (
+                    <SelectItem key={pc} value={String(pc)}>{pc} player{pc > 1 ? "s" : ""}</SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
             <div>
@@ -311,7 +357,7 @@ export default function SessionDetailPage() {
                   <div key={g.game_session_id} className="border-b border-border pb-2 last:border-0">
                     <div className="flex justify-between font-bold"><span>{g.resource_name} ({g.game_type_name})</span><span>{fmtMoney(g.subtotal)}</span></div>
                     <div className="text-xs text-muted-foreground">
-                      {Math.round(g.charge.billable_minutes)}min billable ({g.charge.weekday}) · {fmtMoney(g.charge.amount)}
+                      {Math.round(g.charge.billable_minutes)}min billable ({g.charge.weekday}) · {(g.charge.player_count || 1)} player{(g.charge.player_count || 1) > 1 ? "s" : ""} · {fmtMoney(g.charge.amount)}
                     </div>
                     {(g.charge.applied_grouped || []).map((s, i) => (
                       <div key={i} className="flex justify-between text-[0.7rem] ml-3">
