@@ -15,15 +15,22 @@ api.interceptors.request.use((config) => {
 });
 
 export function formatApiError(err) {
-  const detail = err?.response?.data?.detail;
+  // Check common backend keys: detail, message, or error
+  const data = err?.response?.data;
+  const detail = data?.detail || data?.message || data?.error;
+
   if (detail == null) return err?.message || "Something went wrong";
+  
   if (typeof detail === "string") return detail;
+  
   if (Array.isArray(detail))
     return detail
       .map((e) => (e && typeof e.msg === "string" ? e.msg : JSON.stringify(e)))
       .filter(Boolean)
       .join(" ");
+      
   if (detail && typeof detail.msg === "string") return detail.msg;
+  
   return String(detail);
 }
 

@@ -61,9 +61,14 @@ export default function SessionDetailPage() {
     return pcs.length ? Array.from(new Set(pcs)).sort((a, b) => a - b) : [1];
   };
 
-  const previewBill = async () => {
-    try { const { data } = await api.get(`/sessions/${id}/bill`); setBill(data); setBillingOpen(true); setAdjustment(0); setPayments([{ mode: "cash", amount: data.grand_total }]); }
-    catch (e) { toast.error(formatApiError(e)); }
+const previewBill = async () => {
+    try { 
+      const { data } = await api.get(`/sessions/${id}/bill`); 
+      setBill(data); // This is 'bill', which the recomputed variable depends on
+      setBillingOpen(true); 
+      setAdjustment(0); 
+      setPayments([{ mode: "cash", amount: data.grand_total }]); 
+    } catch (e) { toast.error(formatApiError(e)); }
   };
 
   const addGame = async () => {
@@ -92,7 +97,33 @@ export default function SessionDetailPage() {
     } catch (e) { toast.error(formatApiError(e)); }
   };
   const removeItem = async (gameId, itemId, itemName) => {
-    try { await api.delete(`/sessions/${id}/games/${gameId}/items/${itemId}`); load(); toast.success(`Removed ${itemName}`); } catch (e) { toast.error(formatApiError(e)); }
+    try {
+      // 1. Tell the backend to delete it
+      await api.delete(`/sessions/${id}/games/${gameId}/items/${itemId}`);
+      toast.success(`Removed ${itemName}`);
+
+      // 2. Instantly remove it from the React state (No race conditions!)
+      setSess((prev) => {
+        if (!prev) return prev;
+        
+        const updatedGames = prev.games.map(game => {
+          // Find the specific game where the item was deleted
+          if (game.id === gameId) {
+            return {
+              ...game,
+              // Filter out the deleted item by its ID
+              items: game.items.filter(item => item.id !== itemId)
+            };
+          }
+          return game;
+        });
+        
+        return { ...prev, games: updatedGames };
+      });
+
+    } catch (e) { 
+      toast.error(formatApiError(e)); 
+    }
   };
 
   const recalcBill = () => {
@@ -123,11 +154,12 @@ export default function SessionDetailPage() {
 
   const printReceipt = () => { window.print(); };
 
-  const shareWhatsApp = () => {
-    const text = buildReceiptText(sess, cafe);
+const shareWhatsApp = () => {
+    // IMPORTANT: Use recomputed here!
+    const text = buildReceiptText(sess, cafe, recomputed); 
     const phone = (sess?.customer_phone || "").replace(/\D/g, "");
-    const url = phone ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}` : `https://wa.me/?text=${encodeURIComponent(text)}`;
-    window.open(url, "_blank", "noopener,noreferrer");
+    const url = `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
+    window.open(url, "_blank");
   };
 
   if (!sess) return <div className="text-muted-foreground">Loading…</div>;
@@ -409,7 +441,11 @@ export default function SessionDetailPage() {
         </DialogContent>
       </Dialog>
 
-      <ReceiptPrint session={sess} cafe={cafe} />
+      <ReceiptPrint 
+  session={sess} 
+  cafe={cafe} 
+  bill={recomputed} // This fixes the Zero Total issue
+/>
     </div>
   );
 }

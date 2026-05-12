@@ -16,7 +16,10 @@ export default function DashboardPage() {
   const load = async () => {
     try {
       if (user?.role === "CAFE_ADMIN" || user?.permissions?.includes("reports")) {
-        const { data } = await api.get("/reports/daily");
+        const todayStr = new Date().toISOString().split('T')[0]; 
+        
+        // Pass the date as a query parameter
+        const { data } = await api.get(`/reports/daily?date=${todayStr}`);
         setToday(data);
       }
       const a = await api.get("/sessions/active").catch(() => ({ data: [] }));
