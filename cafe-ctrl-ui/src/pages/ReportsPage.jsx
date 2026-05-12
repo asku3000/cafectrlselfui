@@ -18,6 +18,7 @@ const COLORS = ["hsl(217 91% 60%)", "hsl(38 92% 50%)", "hsl(152 60% 45%)", "hsl(
 export default function ReportsPage() {
   const { cafe } = useAuth();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [auditDate, setAuditDate] = useState(new Date().toISOString().slice(0, 10));
   const [daily, setDaily] = useState(null);
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
@@ -46,13 +47,21 @@ export default function ReportsPage() {
     catch (e) { toast.error(formatApiError(e)); }
   };
   const loadAudit = async () => {
-    try { const { data } = await api.get("/audit?limit=200"); setAudit(data); }
-    catch (e) { toast.error(formatApiError(e)); }
+    try { 
+      const url = `/audit?date=${auditDate}&limit=200`;
+      const { data } = await api.get(url); 
+      setAudit(data); 
+    } catch (e) { 
+      toast.error(formatApiError(e)); 
+    }
   };
+ 
   useEffect(() => { loadDaily(); }, [date]);
   useEffect(() => { loadMonthly(); }, [year, month]);
-  useEffect(() => { loadAudit(); }, []);
-
+   // Change the dependency array from [] to [auditDate]
+  useEffect(() => { 
+    loadAudit(); 
+  }, [auditDate]);
   const dailyByMode = Object.entries(daily?.by_mode || {}).map(([k, v]) => ({ name: k.toUpperCase(), value: v }));
   const monthlyDays = Object.entries(monthly?.by_day || {}).sort().map(([k, v]) => ({ day: k.slice(8), amount: v }));
   const monthlyGames = Object.entries(monthly?.by_game_type || {}).map(([k, v]) => ({ name: k, value: v }));
@@ -304,6 +313,11 @@ export default function ReportsPage() {
         </TabsContent>
 
         <TabsContent value="audit" className="space-y-4">
+          {/* ---> NEW UI FIX: Date Picker for the Audit Tab <--- */}
+          <div className="flex gap-2 items-center">
+            <span className="uppercase-label">Date</span>
+            <DatePicker value={auditDate} onChange={setAuditDate} data-testid="audit-date-input"/>
+          </div>
           <Card>
             <CardHeader><CardTitle className="font-display">Activity Timeline</CardTitle></CardHeader>
             <CardContent>

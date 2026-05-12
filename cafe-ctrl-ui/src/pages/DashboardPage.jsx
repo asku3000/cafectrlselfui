@@ -15,7 +15,7 @@ export default function DashboardPage() {
 
   const load = async () => {
     try {
-      if (user?.role === "cafe_admin" || user?.permissions?.includes("reports")) {
+      if (user?.role === "CAFE_ADMIN" || user?.permissions?.includes("reports")) {
         const { data } = await api.get("/reports/daily");
         setToday(data);
       }
