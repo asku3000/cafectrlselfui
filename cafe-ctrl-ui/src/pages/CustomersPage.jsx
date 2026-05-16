@@ -10,13 +10,16 @@ import { User, Phone, Notebook, Clock, CheckCircle, Receipt } from "@phosphor-ic
 import { toast } from "sonner";
 import { Link, useNavigate } from "react-router-dom";
 
-// ... rest of the imports
-
 export default function CustomersPage() {
   const [activeTab, setActiveTab] = useState("directory"); 
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
+
+  // --- NEW: Pagination State ---
+  const [currentPage, setCurrentPage] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [totalItems, setTotalItems] = useState(0);
 
   // Data pools
   const [customers, setCustomers] = useState([]);
@@ -35,8 +38,19 @@ export default function CustomersPage() {
     setLoading(true);
     try {
       if (activeTab === "directory") {
-        const { data } = await api.get("/customers");
-        setCustomers(data);
+        // UPDATED: Pass page and size parameters
+        const { data } = await api.get(`/customers?page=${currentPage}&size=10`);
+        
+        // Handles both the new paginated map response or legacy flat list
+        if (data && data.data) {
+          setCustomers(data.data);
+          setTotalPages(data.totalPages);
+          setTotalItems(data.totalItems);
+        } else {
+          setCustomers(data || []);
+          setTotalItems(data?.length || 0);
+          setTotalPages(1);
+        }
       } else {
         const { data } = await api.get("/customers/pending");
         setPendingList(data);
@@ -48,7 +62,8 @@ export default function CustomersPage() {
     }
   };
 
-  useEffect(() => { loadData(); }, [activeTab]);
+  // UPDATED: Added currentPage to the dependency array so it re-fetches when page changes
+  useEffect(() => { loadData(); }, [activeTab, currentPage]);
 
   const viewCustomerProfile = async (cust) => {
     try {
@@ -60,7 +75,6 @@ export default function CustomersPage() {
     }
   };
 
-  // NEW: Function to fetch the original session and open the receipt modal directly
   const viewPendingBill = async (sessionId) => {
     try {
       const { data } = await api.get(`/sessions/${sessionId}`);
@@ -96,7 +110,7 @@ export default function CustomersPage() {
       {/* Tabs Menu Navigation Bar */}
       <div className="flex border-b border-border gap-6">
         <button 
-          onClick={() => { setActiveTab("directory"); setSearchQuery(""); }}
+          onClick={() => { setActiveTab("directory"); setSearchQuery(""); setCurrentPage(0); }}
           className={`pb-3 text-sm font-bold tracking-tight transition-all ${activeTab === "directory" ? "border-b-2 border-primary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
         >
           Customer Directory
@@ -115,7 +129,7 @@ export default function CustomersPage() {
         /* TAB 1: CUSTOMER DIRECTORY SYSTEM LAYOUT */
         <div className="space-y-4">
           <Input 
-            placeholder="Filter profiles by customer name or phone..." 
+            placeholder="Filter current page profiles by name or phone..." 
             value={searchQuery} 
             onChange={e => setSearchQuery(e.target.value)}
             className="max-w-md"
@@ -150,6 +164,36 @@ export default function CustomersPage() {
                   </tbody>
                 </table>
               </div>
+
+              {/* NEW: Pagination Controls Footer */}
+              <div className="flex items-center justify-between p-4 border-t border-border bg-muted/10">
+                <span className="text-sm text-muted-foreground">
+                  Page <span className="font-bold text-foreground">{currentPage + 1}</span> of {Math.max(1, totalPages)}
+                  <span className="ml-2 px-2 py-0.5 rounded-full bg-muted text-xs">
+                    {totalItems} Total Records
+                  </span>
+                </span>
+                
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setCurrentPage(prev => prev - 1)}
+                    disabled={currentPage === 0}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setCurrentPage(prev => prev + 1)}
+                    disabled={currentPage >= totalPages - 1}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+
             </CardContent>
           </Card>
         </div>
@@ -177,7 +221,6 @@ export default function CustomersPage() {
                       <td className="py-3 px-4 text-muted-foreground text-xs">{fmtDateTime(p.createdAt)}</td>
                       <td className="py-3 px-4 text-right font-mono font-extrabold text-amber-500">{fmtMoney(p.amount)}</td>
                       
-                      {/* UPDATED: Added the View Receipt button next to Collect */}
                       <td className="py-3 px-4 text-center flex items-center justify-center gap-2">
                         <Button 
                           size="icon" 
@@ -218,15 +261,12 @@ export default function CustomersPage() {
               </div>
               
               <div className="space-y-3">
-                {/* MODAL 1: CUSTOMER TIMELINE HISTORY DRILLDOWN INSPECTOR */}
-                {/* ... existing header code ... */}
-                
                 <div className="uppercase-label text-xs font-bold text-muted-foreground">Session Timeline Entries</div>
                 {customerHistory.map(h => (
                   <div 
                     key={h.id} 
-                    onClick={() => navigate(`/sessions/${h.id}`)} // <-- 1. Navigates on row click
-                    className="border border-border rounded-md p-4 flex justify-between items-center bg-card hover:border-primary/40 hover:bg-primary/5 transition-all cursor-pointer group" // <-- 2. Added cursor-pointer and hover effects
+                    onClick={() => navigate(`/sessions/${h.id}`)}
+                    className="border border-border rounded-md p-4 flex justify-between items-center bg-card hover:border-primary/40 hover:bg-primary/5 transition-all cursor-pointer group"
                   >
                     <div className="space-y-1">
                       <div className="text-sm font-bold flex items-center gap-2 group-hover:text-primary transition-colors">
@@ -242,7 +282,7 @@ export default function CustomersPage() {
                           size="icon" 
                           variant="ghost" 
                           onClick={(e) => { 
-                            e.stopPropagation(); // <-- 3. CRITICAL: Stops the row click from firing when clicking the receipt!
+                            e.stopPropagation();
                             setActiveReceipt(h); 
                           }}
                         >
@@ -260,7 +300,6 @@ export default function CustomersPage() {
 
      {/* MODAL 2: SIMPLIFIED RECEIPT SUMMARY DIALOG */}
       <Dialog open={!!activeReceipt} onOpenChange={v => !v && setActiveReceipt(null)}>
-        {/* Changed max-w-2xl to max-w-sm for a tighter, cleaner receipt look */}
         <DialogContent className="max-w-sm" data-testid="bill-detail-dialog">
           <DialogHeader>
             <DialogTitle className="font-display">
@@ -270,7 +309,6 @@ export default function CustomersPage() {
           
           {activeReceipt && (
             <div className="space-y-5 text-sm mt-2">
-              {/* Receipt Metadata Header */}
               <div className="flex justify-between text-[0.7rem] text-muted-foreground border-b border-border pb-3">
                 <div className="space-y-0.5">
                   <div>{fmtDateTime(activeReceipt.billed_at || activeReceipt.created_at)}</div>
@@ -282,7 +320,6 @@ export default function CustomersPage() {
                 </div>
               </div>
 
-              {/* The Big Total Box */}
               <div className="bg-muted/40 p-6 rounded-lg text-center space-y-1 border border-border">
                 <div className="text-muted-foreground text-xs uppercase tracking-widest font-bold">Grand Total</div>
                 <div className="text-4xl font-display font-bold text-primary">
@@ -290,7 +327,6 @@ export default function CustomersPage() {
                 </div>
               </div>
 
-              {/* Payment Splits */}
               <div className="space-y-2">
                 <div className="text-[0.65rem] uppercase tracking-widest font-bold text-muted-foreground border-b border-border pb-1">
                   Settlement Ledger
@@ -306,7 +342,6 @@ export default function CustomersPage() {
                 )}
               </div>
 
-              {/* Optional Notes */}
               {activeReceipt.notes && (
                 <div className="text-[0.7rem] text-muted-foreground italic pt-2 border-t border-border">
                   Note: {activeReceipt.notes}
@@ -315,7 +350,6 @@ export default function CustomersPage() {
             </div>
           )}
           
-          {/* Action Footer */}
           <DialogFooter className="flex-col sm:flex-row gap-2 mt-2">
             {activeReceipt && (
               <Link to={`/sessions/${activeReceipt.id}`} className="w-full sm:w-auto">
