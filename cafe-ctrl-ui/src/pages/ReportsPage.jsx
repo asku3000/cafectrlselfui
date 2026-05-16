@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, PieChart, Pie, Cell } from "recharts";
 import DatePicker from "../components/DatePicker";
 import ReceiptPrint, { buildReceiptText } from "../components/Receipt";
-import { Printer, WhatsappLogo, ArrowSquareOut } from "@phosphor-icons/react";
+import { Printer, WhatsappLogo, ArrowSquareOut, CheckCircle, User,} from "@phosphor-icons/react";
 import { useAuth } from "../contexts/AuthContext";
 import { Link } from "react-router-dom";
 
@@ -117,7 +117,58 @@ export default function ReportsPage() {
               </table>
             </CardContent>
           </Card>
-
+          {daily?.recovered_debts && daily.recovered_debts.length > 0 && (
+          <Card className="border-amber-500/30 mt-6">
+            <CardHeader className="bg-amber-500/5 pb-4">
+              <CardTitle className="font-display text-lg flex items-center gap-2 text-amber-600 dark:text-amber-500">
+                <CheckCircle size={20} /> 
+                Recovered Pending Accounts
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                These past dues were collected today and have been added to today's {fmtMoney(daily.total)} revenue.
+              </p>
+            </CardHeader>
+            <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead>
+                  <tr className="border-b border-border bg-muted/20 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                    <th className="py-3 px-4">Customer</th>
+                    <th className="py-3 px-4">Origination Date</th>
+                    <th className="py-3 px-4">Time Cleared</th>
+                    <th className="py-3 px-4">Mode</th>
+                    <th className="py-3 px-4 text-right">Amount Recovered</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/50">
+                  {daily?.recovered_debts?.map((debt, i) => (
+                    <tr key={debt.id || i} className="hover:bg-muted/10">
+                      <td className="py-3 px-4 font-bold flex items-center gap-2">
+                        <User size={16} className="text-muted-foreground" />
+                        {debt.customer_name}
+                      </td>
+                      <td className="py-3 px-4 text-xs text-muted-foreground">
+                        {fmtDateTime(debt.created_at)}
+                      </td>
+                      <td className="py-3 px-4 text-xs">
+                        {fmtDateTime(debt.cleared_at)}
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="text-[0.65rem] uppercase font-bold tracking-widest px-2 py-1 rounded bg-secondary text-secondary-foreground">
+                          {debt.mode}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono font-bold text-emerald-500">
+                        + {fmtMoney(debt.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+          </Card>
+        )}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card>
               <CardHeader><CardTitle className="font-display">Game-wise revenue</CardTitle></CardHeader>
@@ -177,6 +228,7 @@ export default function ReportsPage() {
               </table>
             </CardContent>
           </Card>
+
 
           <Card>
             <CardHeader>
@@ -310,6 +362,18 @@ export default function ReportsPage() {
               </table>
             </CardContent>
           </Card>
+
+        <Card className="border-amber-500/30 mt-6">
+          <CardHeader className="bg-amber-500/5 pb-4">
+            <CardTitle className="font-display text-lg flex items-center gap-2 text-amber-600 dark:text-amber-500">
+              <CheckCircle size={20} /> 
+              Pending Accounts Recovered This Month
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              These past dues of {fmtMoney(monthly?.pending_total_cleared || 0)} were collected this month and have been added to the {fmtMoney(monthly?.total || 0)} total monthly revenue.</p>
+          </CardHeader>
+          
+        </Card>
         </TabsContent>
 
         <TabsContent value="audit" className="space-y-4">

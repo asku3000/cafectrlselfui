@@ -18,6 +18,7 @@ const NAV = [
   { to: "/staff", label: "Staff", icon: Users, roles: ["CAFE_ADMIN"] },
   { to: "/reports", label: "Reports", icon: ChartBar, roles: ["CAFE_ADMIN", "OPERATOR"], perm: "reports" },
   { to: "/cafe-profile", label: "Cafe Profile", icon: Storefront, roles: ["CAFE_ADMIN"] },
+  { to: "/customers", label: "Customers", icon: Users, roles: ["CAFE_ADMIN", "OPERATOR"] },
 ];
 
 const SUPER_NAV = [

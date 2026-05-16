@@ -417,7 +417,7 @@ const shareWhatsApp = () => {
                   <div key={i} className="flex gap-2">
                     <Select value={p.mode} onValueChange={v => setPayments(ps => ps.map((x, j) => j === i ? { ...x, mode: v } : x))}>
                       <SelectTrigger className="w-32" data-testid={`pay-mode-${i}`}><SelectValue/></SelectTrigger>
-                      <SelectContent><SelectItem value="cash">Cash</SelectItem><SelectItem value="upi">UPI</SelectItem><SelectItem value="card">Card</SelectItem></SelectContent>
+                      <SelectContent><SelectItem value="cash">Cash</SelectItem><SelectItem value="upi">UPI</SelectItem><SelectItem value="card">Card</SelectItem><SelectItem value="pending">Pending</SelectItem></SelectContent>
                     </Select>
                     <Input type="number" value={p.amount} onChange={e => setPayments(ps => ps.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))} data-testid={`pay-amount-${i}`}/>
                     {payments.length > 1 && <Button size="icon" variant="ghost" onClick={() => setPayments(ps => ps.filter((_, j) => j !== i))}><Trash size={16}/></Button>}

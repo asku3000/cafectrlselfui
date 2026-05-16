@@ -23,6 +23,7 @@ import CafeProfilePage from "./pages/CafeProfilePage";
 import AuthCallback from "./pages/AuthCallback";
 import AppShell from "./layouts/AppShell";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
+import CustomersPage from "./pages/CustomersPage";
 console.log("APP.JS IS LOADED");
 // function Protected({ roles, perm, children }) {
 //   const { user, loading } = useAuth();
@@ -100,6 +101,7 @@ function App() {
               <Route path="/reports" element={<Protected perm="reports"><ReportsPage/></Protected>}/>
               <Route path="/cafe-profile" element={<Protected roles={["CAFE_ADMIN"]}><CafeProfilePage/></Protected>}/>
               <Route path="/change-password" element={<ChangePasswordPage/>}/>
+              <Route path="/customers" element={<CustomersPage />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace/>}/>
