@@ -17,7 +17,7 @@ api.interceptors.request.use((config) => {
 export function formatApiError(err) {
   // Check common backend keys: detail, message, or error
   const data = err?.response?.data;
-  const detail = data?.detail || data?.message || data?.error;
+  const detail = data?.detail || data?.message || data?.error || data;
 
   if (detail == null) return err?.message || "Something went wrong";
   

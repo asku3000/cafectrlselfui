@@ -22,6 +22,7 @@ import ChangePasswordPage from "./pages/ChangePasswordPage";
 import CafeProfilePage from "./pages/CafeProfilePage";
 import AuthCallback from "./pages/AuthCallback";
 import AppShell from "./layouts/AppShell";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
 console.log("APP.JS IS LOADED");
 // function Protected({ roles, perm, children }) {
 //   const { user, loading } = useAuth();
@@ -83,6 +84,7 @@ function App() {
             <Route path="/" element={<RootRedirect/>}/>
             <Route path="/login" element={<LoginPage/>}/>
             <Route path="/signup" element={<SignupPage/>}/>
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route path="/setup" element={<Protected roles={["CAFE_ADMIN"]}><CafeSetupPage/></Protected>}/>
             <Route path="/super-admin" element={<Protected roles={["SUPER_ADMIN"]}><SuperAdminPage/></Protected>}/>
 
