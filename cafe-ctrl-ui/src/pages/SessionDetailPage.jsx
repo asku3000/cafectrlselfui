@@ -13,6 +13,7 @@ import { useAuth } from "../contexts/AuthContext";
 import ReceiptPrint, { buildReceiptText } from "../components/Receipt";
 import DateTimePicker from "../components/DateTimePicker";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "../components/ui/alert-dialog";
+import LocalSearchableSelect from "../components/LocalSearchableSelect";
 
 export default function SessionDetailPage() {
   const { id } = useParams();
@@ -169,6 +170,12 @@ const shareWhatsApp = () => {
   const isAdmin = user?.role === "CAFE_ADMIN";
   const totalMins = sess.games.reduce((a, g) => a + minutesBetween(g.start_time, g.end_time || new Date()), 0);
   const availableResources = resources.filter(r => !r.active && !sess.games.some(g => g.status === "active" && g.resource_id === r.id));
+
+  const currentList = itemPick.type === "inventory" ? inventory : accessories;
+const searchOptions = currentList.map(it => ({
+  value: it.id,
+  label: `${it.name} — ${fmtMoney(it.price)}` // Keeps your money formatting!
+}));
 
   return (
     <div className="space-y-6" data-testid="session-detail-root">
@@ -348,35 +355,41 @@ const shareWhatsApp = () => {
 
       {/* Add Item */}
       <Dialog open={itemPick.open} onOpenChange={(v) => setItemPick(s => ({ ...s, open: v }))}>
-        <DialogContent>
-          <DialogHeader><DialogTitle className="font-display">Add item</DialogTitle></DialogHeader>
-          <div className="space-y-4">
-            <div className="flex gap-2">
-              <Button size="sm" variant={itemPick.type === "inventory" ? "default" : "outline"} onClick={() => setItemPick(s => ({ ...s, type: "inventory", ref_id: "" }))} data-testid="item-tab-inv">Snacks/Drinks</Button>
-              <Button size="sm" variant={itemPick.type === "accessory" ? "default" : "outline"} onClick={() => setItemPick(s => ({ ...s, type: "accessory", ref_id: "" }))} data-testid="item-tab-acc">Accessories</Button>
-            </div>
-            <div>
-              <Label>{itemPick.type === "inventory" ? "Item" : "Accessory"}</Label>
-              <Select value={itemPick.ref_id} onValueChange={v => setItemPick(s => ({ ...s, ref_id: v }))}>
-                <SelectTrigger data-testid="item-pick-select"><SelectValue placeholder="Select"/></SelectTrigger>
-                <SelectContent>
-                  {(itemPick.type === "inventory" ? inventory : accessories).map(it => (
-                    <SelectItem key={it.id} value={it.id}>{it.name} — {fmtMoney(it.price)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Quantity</Label>
-              <Input type="number" min={1} value={itemPick.qty} onChange={e => setItemPick(s => ({ ...s, qty: e.target.value }))} data-testid="item-qty-input"/>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setItemPick({ open: false, gameId: null, type: "inventory", ref_id: "", qty: 1 })}>Cancel</Button>
-            <Button onClick={addItem} data-testid="item-add-save">Add</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+  <DialogContent className="overflow-visible"> {/* Ensure popover can break out of modal bounds if needed */}
+    <DialogHeader><DialogTitle className="font-display">Add item</DialogTitle></DialogHeader>
+    <div className="space-y-4">
+      
+      <div className="flex gap-2">
+        <Button size="sm" variant={itemPick.type === "inventory" ? "default" : "outline"} onClick={() => setItemPick(s => ({ ...s, type: "inventory", ref_id: "" }))} data-testid="item-tab-inv">Snacks/Drinks</Button>
+        <Button size="sm" variant={itemPick.type === "accessory" ? "default" : "outline"} onClick={() => setItemPick(s => ({ ...s, type: "accessory", ref_id: "" }))} data-testid="item-tab-acc">Accessories</Button>
+      </div>
+
+      <div>
+        <Label>{itemPick.type === "inventory" ? "Item" : "Accessory"}</Label>
+        
+        {/* NEW SEARCHABLE DROPDOWN */}
+        <LocalSearchableSelect 
+          options={searchOptions}
+          value={itemPick.ref_id}
+          onValueChange={v => setItemPick(s => ({ ...s, ref_id: v }))}
+          placeholder="Type to search..."
+        />
+
+      </div>
+
+      <div>
+        <Label>Quantity</Label>
+        <Input type="number" min={1} value={itemPick.qty} onChange={e => setItemPick(s => ({ ...s, qty: e.target.value }))} data-testid="item-qty-input"/>
+      </div>
+
+    </div>
+    
+    <DialogFooter>
+      <Button variant="outline" onClick={() => setItemPick({ open: false, gameId: null, type: "inventory", ref_id: "", qty: 1 })}>Cancel</Button>
+      <Button onClick={addItem} data-testid="item-add-save" disabled={!itemPick.ref_id}>Add</Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
 
       {/* Billing */}
       <Dialog open={billingOpen} onOpenChange={setBillingOpen}>
