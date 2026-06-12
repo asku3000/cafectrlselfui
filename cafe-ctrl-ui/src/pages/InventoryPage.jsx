@@ -3,9 +3,10 @@ import { api, formatApiError, fmtMoney } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Card, CardContent } from "../components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
+import { Switch } from "../components/ui/switch"; // <-- NEW IMPORT
 import { Plus, Trash, PencilSimple } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { useAuth } from "../contexts/AuthContext";
@@ -18,23 +19,62 @@ export default function InventoryPage() {
   const [items, setItems] = useState([]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name: "", category: "snack", price: 0, stock: 0 });
+  
+  // Added is_trackable to the base form state
+  const [form, setForm] = useState({ name: "", category: "snack", price: 0, stock: 0, is_trackable: true });
 
-  const load = async () => { try { const { data } = await api.get("/inventory"); setItems(data); } catch (e) { toast.error(formatApiError(e)); } };
+  const load = async () => { 
+    try { 
+      const { data } = await api.get("/inventory"); 
+      setItems(data); 
+    } catch (e) { 
+      toast.error(formatApiError(e)); 
+    } 
+  };
+  
   useEffect(() => { load(); }, []);
 
-  const openNew = () => { setEditing(null); setForm({ name: "", category: "snack", price: 0, stock: 0 }); setOpen(true); };
-  const openEdit = (it) => { setEditing(it); setForm({ ...it }); setOpen(true); };
+  const openNew = () => { 
+    setEditing(null); 
+    setForm({ name: "", category: "snack", price: 0, stock: 0, is_trackable: true }); 
+    setOpen(true); 
+  };
+  
+  const openEdit = (it) => { 
+    setEditing(it); 
+    // Fallback to true if is_trackable is undefined on old database items
+    setForm({ ...it, is_trackable: it.is_trackable !== false }); 
+    setOpen(true); 
+  };
 
   const save = async () => {
     try {
-      const payload = { ...form, price: Number(form.price), stock: Number(form.stock) };
+      // If it is NOT trackable, force stock to 0 so the database stays clean
+      const payload = { 
+        ...form, 
+        price: Number(form.price), 
+        stock: form.is_trackable ? Number(form.stock) : 0 
+      };
+      
       if (editing) await api.put(`/inventory/${editing.id}`, payload);
       else await api.post("/inventory", payload);
-      setOpen(false); load(); toast.success("Saved");
-    } catch (e) { toast.error(formatApiError(e)); }
+      
+      setOpen(false); 
+      load(); 
+      toast.success("Saved");
+    } catch (e) { 
+      toast.error(formatApiError(e)); 
+    }
   };
-  const remove = async (id) => { try { await api.delete(`/inventory/${id}`); load(); } catch (e) { toast.error(formatApiError(e)); } };
+  
+  const remove = async (id) => { 
+    try { 
+      await api.delete(`/inventory/${id}`); 
+      load(); 
+    } catch (e) { 
+      toast.error(formatApiError(e)); 
+    } 
+  };
 
   return (
     <div className="space-y-6" data-testid="inventory-root">
@@ -58,15 +98,24 @@ export default function InventoryPage() {
               </thead>
               <tbody>
                 {items.map(it => (
-                  <tr key={it.id} className="border-b border-border" data-testid={`inv-${it.id}`}>
+                  <tr key={it.id} className="border-b border-border hover:bg-muted/50 transition-colors" data-testid={`inv-${it.id}`}>
                     <td className="py-3 font-semibold">{it.name}</td>
                     <td className="capitalize">{it.category}</td>
                     <td className="font-mono">{fmtMoney(it.price)}</td>
-                    <td className="font-mono">{it.stock}</td>
+                    
+                    {/* NEW: Displays Infinity symbol if not trackable */}
+                    <td className="font-mono">
+                      {it.is_trackable !== false ? (
+                        it.stock
+                      ) : (
+                        <span className="text-xl leading-none text-muted-foreground" title="Untracked Item">∞</span>
+                      )}
+                    </td>
+
                     {isAdmin && (
                       <td className="text-right">
                         <Button size="icon" variant="ghost" onClick={() => openEdit(it)}><PencilSimple size={16}/></Button>
-                        <Button size="icon" variant="ghost" onClick={() => remove(it.id)}><Trash size={16}/></Button>
+                        <Button size="icon" variant="ghost" className="text-destructive" onClick={() => remove(it.id)}><Trash size={16}/></Button>
                       </td>
                     )}
                   </tr>
@@ -82,7 +131,9 @@ export default function InventoryPage() {
         <DialogContent>
           <DialogHeader><DialogTitle className="font-display">{editing ? "Edit" : "New"} Inventory</DialogTitle></DialogHeader>
           <div className="space-y-4">
+            
             <div><Label>Name</Label><Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} data-testid="inv-name-input"/></div>
+            
             <div>
               <Label>Category</Label>
               <Select value={form.category} onValueChange={v => setForm(f => ({ ...f, category: v }))}>
@@ -90,10 +141,31 @@ export default function InventoryPage() {
                 <SelectContent>{CATEGORIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Price</Label><Input type="number" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} data-testid="inv-price-input"/></div>
-              <div><Label>Stock</Label><Input type="number" value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} data-testid="inv-stock-input"/></div>
+
+            {/* NEW: Trackable Toggle Switch */}
+            <div className="flex flex-row items-center justify-between rounded-lg border border-border p-4 shadow-sm">
+              <div className="space-y-0.5">
+                <Label className="text-base font-medium">Track Inventory</Label>
+                <p className="text-xs text-muted-foreground">
+                  Disable for services or unlimited items.
+                </p>
+              </div>
+              <Switch
+                checked={form.is_trackable}
+                onCheckedChange={v => setForm(f => ({ ...f, is_trackable: v }))}
+                data-testid="inv-trackable-switch"
+              />
             </div>
+
+            <div className={`grid ${form.is_trackable ? 'grid-cols-2' : 'grid-cols-1'} gap-3`}>
+              <div><Label>Price</Label><Input type="number" min={0} value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} data-testid="inv-price-input"/></div>
+              
+              {/* NEW: Only show stock input if tracking is enabled */}
+              {form.is_trackable && (
+                <div><Label>Stock</Label><Input type="number" min={0} value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} data-testid="inv-stock-input"/></div>
+              )}
+            </div>
+
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
