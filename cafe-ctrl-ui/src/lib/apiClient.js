@@ -94,11 +94,8 @@ export const toLocalInput = (input) => {
   return "";
 };
 
-// Protects payload from Axios UTC conversion AND stops Java from adding 5.5 hours
 export const fromLocalInput = (input) => {
   if (!input) return null;
-  
-  const offsetStr = getTzOffsetString(); // Gets "+05:30"
 
   if (input instanceof Date) {
     const yyyy = input.getFullYear();
@@ -106,19 +103,27 @@ export const fromLocalInput = (input) => {
     const dd = String(input.getDate()).padStart(2, '0');
     const hh = String(input.getHours()).padStart(2, '0');
     const min = String(input.getMinutes()).padStart(2, '0');
-    // Append the +05:30 instead of the Z!
-    return `${yyyy}-${mm}-${dd}T${hh}:${min}:00${offsetStr}`;
+    
+    // Sends PURE string: "2026-06-13T13:16:00"
+    return `${yyyy}-${mm}-${dd}T${hh}:${min}:00`; 
   }
 
   if (typeof input === "string") {
-    let baseStr = input.replace("Z", ""); // Strip our old fake Z
+    // 1. Strip the Z if it exists
+    let baseStr = input.replace("Z", ""); 
+    
+    // 2. If it is exactly 16 chars from the HTML picker (YYYY-MM-DDThh:mm), add seconds
     if (baseStr.length === 16) {
-      return `${baseStr}:00${offsetStr}`;
+      return `${baseStr}:00`; 
     }
-    if (baseStr.length === 19) {
-      return `${baseStr}${offsetStr}`;
+    
+    // 3. If it is longer (like YYYY-MM-DDThh:mm:ss+05:30), chop it at exactly 19 characters.
+    // This safely deletes the timezone offset without touching the date hyphens!
+    if (baseStr.length >= 19) {
+      return baseStr.substring(0, 19); 
     }
-    return input;
+    
+    return baseStr;
   }
 
   return input;
