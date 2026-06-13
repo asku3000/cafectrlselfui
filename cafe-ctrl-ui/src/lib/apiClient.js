@@ -97,33 +97,21 @@ export const toLocalInput = (input) => {
 export const fromLocalInput = (input) => {
   if (!input) return null;
 
-  if (input instanceof Date) {
-    const yyyy = input.getFullYear();
-    const mm = String(input.getMonth() + 1).padStart(2, '0');
-    const dd = String(input.getDate()).padStart(2, '0');
-    const hh = String(input.getHours()).padStart(2, '0');
-    const min = String(input.getMinutes()).padStart(2, '0');
+  // 1. If it's a string, clean it manually
+  if (typeof input === "string") {
+    // If it comes from HTML picker, it looks like "2026-06-13T13:13"
+    // Just append :00
+    if (input.length === 16) return `${input}:00`;
     
-    // Sends PURE string: "2026-06-13T13:16:00"
-    return `${yyyy}-${mm}-${dd}T${hh}:${min}:00`; 
+    // If it has a Z or milliseconds (e.g., 2026-06-13T07:43:00.000Z)
+    // Strip everything after the seconds (first 19 chars)
+    return input.substring(0, 19); 
   }
 
-  if (typeof input === "string") {
-    // 1. Strip the Z if it exists
-    let baseStr = input.replace("Z", ""); 
-    
-    // 2. If it is exactly 16 chars from the HTML picker (YYYY-MM-DDThh:mm), add seconds
-    if (baseStr.length === 16) {
-      return `${baseStr}:00`; 
-    }
-    
-    // 3. If it is longer (like YYYY-MM-DDThh:mm:ss+05:30), chop it at exactly 19 characters.
-    // This safely deletes the timezone offset without touching the date hyphens!
-    if (baseStr.length >= 19) {
-      return baseStr.substring(0, 19); 
-    }
-    
-    return baseStr;
+  // 2. If it is a Date object (Safety fallback)
+  if (input instanceof Date) {
+     const pad = (n) => String(n).padStart(2, '0');
+     return `${input.getFullYear()}-${pad(input.getMonth() + 1)}-${pad(input.getDate())}T${pad(input.getHours())}:${pad(input.getMinutes())}:${pad(input.getSeconds())}`;
   }
 
   return input;

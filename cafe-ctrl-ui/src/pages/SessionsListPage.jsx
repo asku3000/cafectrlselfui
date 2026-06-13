@@ -82,18 +82,29 @@ export default function SessionsListPage() {
     setOpenNew(true);
   };
   const start = async () => {
-    try {
-      if (!form.customer_name || !form.resource_id) return toast.error("Customer name & resource required");
-      await api.post("/sessions", {
-        customer_name: form.customer_name,
-        customer_phone: form.customer_phone,
-        resource_id: form.resource_id,
-        player_count: Number(form.player_count) || 1,
-        start_time: fromLocalInput(form.start_time),
-      });
-      setOpenNew(false); load(); toast.success("Session started");
-    } catch (e) { toast.error(formatApiError(e)); }
-  };
+  try {
+    if (!form.customer_name || !form.resource_id) return toast.error("Customer name & resource required");
+    
+    // Create the cleaned payload
+    const payload = {
+      customer_name: form.customer_name,
+      customer_phone: form.customer_phone,
+      resource_id: form.resource_id,
+      player_count: Number(form.player_count) || 1,
+      // Pass the state directly to the cleaner
+      start_time: fromLocalInput(form.start_time),
+    };
+
+    console.log("Sending payload:", payload); // Debugging: Check console in production!
+
+    await api.post("/sessions", payload);
+    setOpenNew(false); 
+    load(); 
+    toast.success("Session started");
+  } catch (e) { 
+    toast.error(formatApiError(e)); 
+  }
+};
 
   return (
     <div className="space-y-6" data-testid="sessions-root">
