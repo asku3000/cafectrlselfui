@@ -45,7 +45,7 @@ export default function SessionDetailPage() {
       const [s, r, inv, acc, rc] = await Promise.all([
         api.get(`/sessions/${id}`),
         api.get("/resources"),
-        api.get("/inventory"),
+        api.get("/inventory?notInclude=ingredient,other"),
         api.get("/accessories"),
         api.get("/rate-cards"),
       ]);

@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import { useAuth } from "../contexts/AuthContext";
 import LocalSearchableSelect from "../components/LocalSearchableSelect"; // Ensure this path is correct!
 
-const CATEGORIES = ["snack", "drink", "other"];
+const CATEGORIES = ["snack", "drink", "ingredient", "other"];
 
 export default function InventoryPage() {
   const { user } = useAuth();
