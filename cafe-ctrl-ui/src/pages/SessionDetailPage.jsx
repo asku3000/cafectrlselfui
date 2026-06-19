@@ -396,7 +396,7 @@ const searchOptions = currentList.map(it => ({
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle className="font-display">Final Bill — {sess.customer_name}</DialogTitle></DialogHeader>
           {recomputed && (
-            <div className="space-y-4">
+            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
               <div className="border border-border rounded-md p-4 space-y-2 font-mono text-sm">
                 {recomputed.games.map(g => (
                   <div key={g.game_session_id} className="border-b border-border pb-2 last:border-0">
