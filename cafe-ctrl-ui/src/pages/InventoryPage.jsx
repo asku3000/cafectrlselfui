@@ -52,12 +52,21 @@ export default function InventoryPage() {
     setOpen(true); 
   };
   
-  const openEdit = (it) => { 
+ const openEdit = (it) => { 
     setEditing(it); 
+    
+    // Map the backend JSON structure to match the UI's expected state
+    const mappedIngredients = (it.ingredients || []).map(ing => ({
+      // Handle both the server format (ing.rawMaterial.id) and local state format (ing.raw_material_id)
+      raw_material_id: ing.rawMaterial?.id || ing.raw_material_id || "",
+      // Map quantityRequired to qty
+      qty: ing.quantityRequired || ing.qty || 1
+    }));
+
     setForm({ 
       ...it, 
       is_trackable: it.is_trackable !== false,
-      ingredients: it.ingredients || [] 
+      ingredients: mappedIngredients 
     }); 
     setOpen(true); 
   };
