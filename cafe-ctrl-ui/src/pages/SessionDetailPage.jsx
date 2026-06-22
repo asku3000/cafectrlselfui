@@ -38,6 +38,11 @@ export default function SessionDetailPage() {
   const [notes, setNotes] = useState("");
   const [itemPick, setItemPick] = useState({ open: false, gameId: null, type: "inventory", ref_id: "", qty: 1 });
 
+  // --- NEW BACKDATE STATES ---
+  const [useBackdate, setUseBackdate] = useState(false);
+  const [backdateTime, setBackdateTime] = useState(toLocalInput());
+  const [isRecalculating, setIsRecalculating] = useState(false);
+
   const canBill = user?.role === "CAFE_ADMIN" || user?.permissions?.includes("billing");
 
   const load = async () => {
@@ -62,14 +67,52 @@ export default function SessionDetailPage() {
     return pcs.length ? Array.from(new Set(pcs)).sort((a, b) => a - b) : [1];
   };
 
-const previewBill = async () => {
+// Upgraded to accept an optional custom end-time
+  const previewBill = async (customEndTime = null) => {
+    // THE BODYGUARD: If an object (like a click event) got in here, assassinate it.
+    if (typeof customEndTime === "object") {
+      customEndTime = null;
+    }
+
     try { 
-      const { data } = await api.get(`/sessions/${id}/bill`); 
-      setBill(data); // This is 'bill', which the recomputed variable depends on
-      setBillingOpen(true); 
+      setIsRecalculating(true);
+      
+      const url = customEndTime 
+        ? `/sessions/${id}/bill?custom_time=${fromLocalInput(customEndTime)}`
+        : `/sessions/${id}/bill`;
+
+      const { data } = await api.get(url); 
+      setBill(data); 
       setAdjustment(0); 
       setPayments([{ mode: "cash", amount: data.grand_total }]); 
+      setBillingOpen(true); 
+    } catch (e) { 
+      toast.error(formatApiError(e)); 
+    } finally {
+      setIsRecalculating(false);
+    }
+  };
+  // Upgraded to bundle the manual timestamp to the backend
+  const checkout = async () => {
+    try {
+      const filtered = payments.filter(p => Number(p.amount) > 0);
+      await api.post(`/sessions/${id}/checkout`, { 
+        adjustment: Number(adjustment || 0), 
+        payments: filtered, 
+        notes,
+        // Send the explicit timestamp if toggled on!
+        manual_billed_at: useBackdate ? fromLocalInput(backdateTime) : null
+      });
+      toast.success("Bill closed successfully!");
+      setBillingOpen(false);
+      setUseBackdate(false); // reset
+      load();
     } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const handleBackdateChange = (newDateTime) => {
+    setBackdateTime(newDateTime);
+    previewBill(newDateTime); // Re-fetch the subtotal live as they change the time!
   };
 
   const addGame = async () => {
@@ -135,16 +178,6 @@ const previewBill = async () => {
   const recomputed = recalcBill();
   const paySum = payments.reduce((a, p) => a + Number(p.amount || 0), 0);
 
-  const checkout = async () => {
-    try {
-      const filtered = payments.filter(p => Number(p.amount) > 0);
-      await api.post(`/sessions/${id}/checkout`, { adjustment: Number(adjustment || 0), payments: filtered, notes });
-      toast.success("Bill closed!");
-      setBillingOpen(false);
-      load();
-    } catch (e) { toast.error(formatApiError(e)); }
-  };
-
   const cancelSession = async () => {
     try {
       await api.post(`/sessions/${id}/cancel`);
@@ -188,7 +221,7 @@ const searchOptions = currentList.map(it => ({
         </div>
         <div className="flex gap-2 flex-wrap">
           {!isBilled && !isCancelled && <Button variant="outline" onClick={() => { setNewGame({ resource_id: "", player_count: 1, start_time: toLocalInput() }); setAddGameOpen(true); }} data-testid="add-game-btn"><Plus size={16}/> Add Game</Button>}
-          {!isBilled && !isCancelled && canBill && <Button onClick={previewBill} data-testid="bill-btn"><Receipt size={16}/> Bill</Button>}
+          {!isBilled && !isCancelled && canBill && <Button onClick={() => previewBill(null)} data-testid="bill-btn"><Receipt size={16}/> Bill</Button>}
           {!isBilled && !isCancelled && isAdmin && (
             <AlertDialog>
               <AlertDialogTrigger asChild>
@@ -423,6 +456,44 @@ const searchOptions = currentList.map(it => ({
                   <Input type="number" value={adjustment} onChange={e => setAdjustment(e.target.value)} className="w-32" data-testid="bill-adjustment-input"/>
                 </div>
                 <Row label="GRAND TOTAL" value={fmtMoney(recomputed.grand_total)} bold />
+                {/* --- MANUAL BACKDATE SECTION --- */}
+<div className="pt-3 border-t border-border space-y-2 bg-amber-500/5 -mx-4 px-4 py-3 rounded-lg border-dashed border-amber-500/30">
+  <div className="flex items-center justify-between">
+    <label className="flex items-center gap-2 text-xs font-bold text-amber-600 uppercase tracking-wider cursor-pointer">
+      <input 
+        type="checkbox" 
+        checked={useBackdate}
+        onChange={(e) => {
+          const isChecked = e.target.checked;
+          setUseBackdate(isChecked);
+          if (isChecked) {
+            setBackdateTime(toLocalInput());
+            previewBill(toLocalInput());
+          } else {
+            previewBill(null); // Return to live time
+          }
+        }}
+        className="rounded border-amber-500 text-amber-600 focus:ring-amber-500"
+      />
+      Manual Backdate (Customer left earlier)
+    </label>
+    {isRecalculating && <span className="text-[0.65rem] font-mono text-amber-600 animate-pulse">recalculating...</span>}
+  </div>
+
+  {useBackdate && (
+    <div className="pt-1 flex items-center gap-2">
+      <div className="flex-1">
+        <DateTimePicker 
+          value={backdateTime} 
+          onChange={handleBackdateChange} 
+        />
+      </div>
+      <span className="text-[0.7rem] text-muted-foreground leading-tight max-w-[180px]">
+        Billable minutes will snap to this exact timestamp.
+      </span>
+    </div>
+  )}
+</div>
               </div>
               <div className="space-y-2">
                 <Label>Payment split</Label>
