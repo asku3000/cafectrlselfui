@@ -6,7 +6,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
-import { User, Phone, Notebook, Clock, CheckCircle, Receipt } from "@phosphor-icons/react";
+import { User, Phone, Notebook, Clock, CheckCircle, Receipt, Plus, Trash } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -32,7 +32,8 @@ export default function CustomersPage() {
   
   // Debt settlement processing state
   const [settleTarget, setSettleTarget] = useState(null);
-  const [payMode, setPayMode] = useState("upi");
+  const [settleSplits, setSettleSplits] = useState([{ mode: "upi", amount: 0 }]);
+  const [settleNotes, setSettleNotes] = useState("");
 
   const loadData = async () => {
     setLoading(true);
@@ -62,6 +63,12 @@ export default function CustomersPage() {
     }
   };
 
+  const openSettleModal = (debtObj) => {
+    setSettleTarget(debtObj);
+    setSettleSplits([{ mode: "upi", amount: debtObj.amount }]);
+    setSettleNotes("");
+  };
+
   // UPDATED: Added currentPage to the dependency array so it re-fetches when page changes
   useEffect(() => { loadData(); }, [activeTab, currentPage]);
 
@@ -86,8 +93,23 @@ export default function CustomersPage() {
 
   const executeSettlement = async () => {
     try {
-      await api.post(`/pending-payments/${settleTarget.id}/clear`, { mode: payMode });
-      toast.success("Outstanding balance collected and accounted for today!");
+      const filteredSplits = settleSplits.filter(p => Number(p.amount) > 0);
+      
+      // Bodyguard 1: Did they enter numbers?
+      if (filteredSplits.length === 0) return toast.error("Enter at least one payment value");
+
+      // Bodyguard 2: Does the math equal the exact debt?
+      const totalAssigned = filteredSplits.reduce((sum, p) => sum + Number(p.amount), 0);
+      if (Math.abs(totalAssigned - settleTarget.amount) > 0.01) {
+        return toast.error(`Split math mismatch! You must assign exactly ${fmtMoney(settleTarget.amount)}`);
+      }
+
+      await api.post(`/pending-payments/${settleTarget.id}/clear`, { 
+        payments: filteredSplits,
+        notes: settleNotes 
+      });
+
+      toast.success("Debt settlement accounted and pushed to daily collection!");
       setSettleTarget(null);
       loadData();
     } catch (e) {
@@ -233,7 +255,7 @@ export default function CustomersPage() {
                         <Button 
                           size="sm" 
                           className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
-                          onClick={() => setSettleTarget(p)}
+                          onClick={() => openSettleModal(p)}
                         >
                           <CheckCircle size={14} /> Collect
                         </Button>
@@ -362,34 +384,99 @@ export default function CustomersPage() {
         </DialogContent>
       </Dialog>
 
-      {/* MODAL 3: CASH ACCRUAL DEBT SETTLEMENT PORTAL */}
+      {/* MODAL 3: MULTI-SPLIT DEBT SETTLEMENT PORTAL */}
       <Dialog open={!!settleTarget} onOpenChange={v => !v && setSettleTarget(null)}>
-        <DialogContent>
-          <DialogHeader><DialogTitle className="font-display">Settle Outstanding Debt</DialogTitle></DialogHeader>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl font-bold">
+              Settle Account — {settleTarget?.customerName}
+            </DialogTitle>
+          </DialogHeader>
+
           {settleTarget && (
-            <div className="space-y-4">
-              <div className="p-4 bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-md text-sm">
-                Reconciling account balance collection ledger entries for <b>{settleTarget.customerName}</b> valued at <b>{fmtMoney(settleTarget.amount)}</b>.
+            <div className="space-y-4 pt-2 text-sm">
+              <div className="flex justify-between items-center p-3 bg-muted/40 rounded-lg border border-border font-mono">
+                <span className="text-muted-foreground uppercase text-xs">Total Outstanding</span>
+                <span className="text-lg font-bold text-amber-500">{fmtMoney(settleTarget.amount)}</span>
               </div>
-              <div>
-                <Label htmlFor="settle-gateway-mode">Payment Medium Collected</Label>
-                <Select value={payMode} onValueChange={setPayMode}>
-                  <SelectTrigger id="settle-gateway-mode" className="w-full mt-1.5">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="cash">Cash</SelectItem>
-                    <SelectItem value="upi">UPI</SelectItem>
-                    <SelectItem value="card">Card</SelectItem>
-                  </SelectContent>
-                </Select>
+
+              <div className="space-y-2">
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Collection Split</Label>
+                {settleSplits.map((p, i) => (
+                  <div key={i} className="flex gap-2">
+                    <Select value={p.mode} onValueChange={v => setSettleSplits(ps => ps.map((x, j) => j === i ? { ...x, mode: v } : x))}>
+                      <SelectTrigger className="w-32" data-testid={`settle-mode-${i}`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="cash">Cash</SelectItem>
+                        <SelectItem value="upi">UPI</SelectItem>
+                        <SelectItem value="card">Card</SelectItem>
+                        <SelectItem value="pending">Pending (Carry Fwd)</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <Input 
+                      type="number" 
+                      min={0}
+                      value={p.amount} 
+                      onChange={e => setSettleSplits(ps => ps.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))}
+                      className="font-mono font-bold"
+                    />
+
+                    {settleSplits.length > 1 && (
+                      <Button size="icon" variant="ghost" onClick={() => setSettleSplits(ps => ps.filter((_, j) => j !== i))}>
+                        <Trash size={16} className="text-destructive" />
+                      </Button>
+                    )}
+                  </div>
+                ))}
+
+                <Button size="sm" variant="outline" className="w-full border-dashed mt-1" onClick={() => setSettleSplits(ps => [...ps, { mode: "cash", amount: 0 }])}>
+                  <Plus size={14} className="mr-1" /> Add split
+                </Button>
+
+                {/* Operator Math Helper */}
+                {(() => {
+                  const paySum = settleSplits.reduce((a, p) => a + Number(p.amount || 0), 0);
+                  const isBalanced = Math.abs(paySum - settleTarget.amount) < 0.01;
+                  const realPaid = settleSplits.filter(x => x.mode !== "pending").reduce((a, p) => a + Number(p.amount || 0), 0);
+                  const newDebt = settleSplits.filter(x => x.mode === "pending").reduce((a, p) => a + Number(p.amount || 0), 0);
+
+                  return (
+                    <div className="pt-2">
+                      <div className="text-xs text-muted-foreground flex justify-between">
+                        <span>Assigned: <b className="font-mono text-foreground">{fmtMoney(paySum)}</b> / {fmtMoney(settleTarget.amount)}</span>
+                        {!isBalanced && <span className="text-destructive font-bold animate-pulse">Unbalanced</span>}
+                      </div>
+
+                      {isBalanced && (
+                        <div className="mt-2.5 p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-xs flex justify-between font-medium text-emerald-600">
+                          <span>Collecting Today: <b>{fmtMoney(realPaid)}</b></span>
+                          <span>New tab balance: <b>{fmtMoney(newDebt)}</b></span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
+
+              <Input 
+                placeholder="Settlement notes (e.g. 'Promised rest on Friday')" 
+                value={settleNotes} 
+                onChange={e => setSettleNotes(e.target.value)} 
+              />
             </div>
           )}
-          <DialogFooter>
+
+          <DialogFooter className="mt-2">
             <Button variant="outline" onClick={() => setSettleTarget(null)}>Cancel</Button>
-            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={executeSettlement}>
-              Settle
+            <Button 
+              className="bg-emerald-600 hover:bg-emerald-700 text-white" 
+              onClick={executeSettlement}
+              disabled={!settleTarget || Math.abs(settleSplits.reduce((a, p) => a + Number(p.amount || 0), 0) - settleTarget.amount) > 0.01}
+            >
+              Post Settlement
             </Button>
           </DialogFooter>
         </DialogContent>
