@@ -66,6 +66,23 @@ export default function ReportsPage() {
   const monthlyDays = Object.entries(monthly?.by_day || {}).sort().map(([k, v]) => ({ day: k.slice(8), amount: v }));
   const monthlyGames = Object.entries(monthly?.by_game_type || {}).map(([k, v]) => ({ name: k, value: v }));
 
+  const prevMonth = () => {
+    if (month === 1) {
+      setMonth(12);
+      setYear(year - 1);
+    } else {
+      setMonth(month - 1);
+    }
+  };
+
+  const nextMonth = () => {
+    if (month === 12) {
+      setMonth(1);
+      setYear(year + 1);
+    } else {
+      setMonth(month + 1);
+    }
+  };
   return (
     <div className="space-y-6" data-testid="reports-root">
       <div>
@@ -262,11 +279,37 @@ export default function ReportsPage() {
         </TabsContent>
 
         <TabsContent value="monthly" className="space-y-4">
-          <div className="flex gap-2 items-center flex-wrap">
-            <span className="uppercase-label">Period</span>
-            <Input type="number" value={month} onChange={e => setMonth(Number(e.target.value))} className="w-20" data-testid="monthly-month-input"/>
-            <Input type="number" value={year} onChange={e => setYear(Number(e.target.value))} className="w-24" data-testid="monthly-year-input"/>
-          </div>
+          <div className="flex items-center gap-4 flex-wrap mb-4">
+  <span className="uppercase-label">Period</span>
+  
+  <div className="flex items-center gap-2 bg-muted/20 p-1.5 rounded-lg border border-border w-full sm:w-auto justify-between sm:justify-start">
+    <Button variant="outline" size="sm" onClick={prevMonth} className="px-3 h-9">
+      {"<"}
+    </Button>
+    
+    <div className="flex items-center gap-1.5">
+      <Input 
+        type="number" 
+        min="1" 
+        max="12" 
+        value={month} 
+        onChange={e => setMonth(Number(e.target.value))} 
+        className="w-14 text-center h-9 font-bold font-mono px-1" 
+      />
+      <span className="text-muted-foreground font-bold">/</span>
+      <Input 
+        type="number" 
+        value={year} 
+        onChange={e => setYear(Number(e.target.value))} 
+        className="w-20 text-center h-9 font-bold font-mono px-1" 
+      />
+    </div>
+
+    <Button variant="outline" size="sm" onClick={nextMonth} className="px-3 h-9">
+      {">"}
+    </Button>
+  </div>
+</div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card><CardContent className="pt-6"><div className="uppercase-label">Revenue</div><div className="text-3xl font-display font-extrabold mt-2 font-mono">{fmtMoney(monthly?.total)}</div></CardContent></Card>
             <Card><CardContent className="pt-6"><div className="uppercase-label">Bills</div><div className="text-3xl font-display font-extrabold mt-2 font-mono">{monthly?.count || 0}</div></CardContent></Card>
