@@ -312,12 +312,12 @@ export default function ReportsPage() {
 
         <TabsContent value="monthly" className="space-y-4">
           <div className="flex items-center gap-4 flex-wrap mb-4">
-  <span className="uppercase-label">Period</span>
+          <span className="uppercase-label">Period</span>
   
-  <div className="flex items-center gap-2 bg-muted/20 p-1.5 rounded-lg border border-border w-full sm:w-auto justify-between sm:justify-start">
-    <Button variant="outline" size="sm" onClick={prevMonth} className="px-3 h-9">
-      {"<"}
-    </Button>
+          <div className="flex items-center gap-2 bg-muted/20 p-1.5 rounded-lg border border-border w-full sm:w-auto justify-between sm:justify-start">
+          <Button variant="outline" size="sm" onClick={prevMonth} className="px-3 h-9">
+            {"<"}
+          </Button>
     
     <div className="flex items-center gap-1.5">
       <Input 
@@ -341,7 +341,11 @@ export default function ReportsPage() {
       {">"}
     </Button>
   </div>
+  <Button variant="outline" className="bg-primary/5 hover:bg-primary/10" onClick={() => exportToPDF(`Monthly_${month}_${year}`)}>
+      <Download size={16} className="mr-2" /> Export PDF
+    </Button>
 </div>
+<div id="pdf-report-container" className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card><CardContent className="pt-6"><div className="uppercase-label">Revenue</div><div className="text-3xl font-display font-extrabold mt-2 font-mono">{fmtMoney(monthly?.total)}</div></CardContent></Card>
             <Card><CardContent className="pt-6"><div className="uppercase-label">Bills</div><div className="text-3xl font-display font-extrabold mt-2 font-mono">{monthly?.count || 0}</div></CardContent></Card>
@@ -449,6 +453,7 @@ export default function ReportsPage() {
           </CardHeader>
           
         </Card>
+        </div>
         </TabsContent>
 
         <TabsContent value="audit" className="space-y-4">
