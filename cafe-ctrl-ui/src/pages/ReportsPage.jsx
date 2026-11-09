@@ -15,6 +15,26 @@ import { Link } from "react-router-dom";
 
 const COLORS = ["hsl(217 91% 60%)", "hsl(38 92% 50%)", "hsl(152 60% 45%)", "hsl(280 70% 60%)"];
 
+
+import html2pdf from "html2pdf.js";
+import { Download } from "@phosphor-icons/react"; // Add this to your Phosphor imports
+
+  const exportToPDF = (reportType) => {
+    // Target the specific container we want to print
+    const element = document.getElementById("pdf-report-container");
+    
+    // Configure the PDF settings for a standard A4 page layout
+    const opt = {
+      margin:       0.5,
+      filename:     `CafeCtrl_${reportType}_Report.pdf`,
+      image:        { type: 'jpeg', quality: 0.98 },
+      html2canvas:  { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+      jsPDF:        { unit: 'in', format: 'a4', orientation: 'portrait' }
+    };
+
+    html2pdf().set(opt).from(element).save();
+  };
+
 export default function ReportsPage() {
   const { cafe } = useAuth();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -102,6 +122,17 @@ export default function ReportsPage() {
             <span className="uppercase-label">Date</span>
             <DatePicker value={date} onChange={setDate} data-testid="daily-date-input"/>
           </div>
+          <div className="flex justify-between items-center flex-wrap gap-4">
+            <div className="flex gap-2 items-center">
+              <span className="uppercase-label">Date</span>
+              <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
+            </div>
+    
+            <Button variant="outline" className="bg-primary/5 hover:bg-primary/10" onClick={() => exportToPDF(`Daily_${date}`)}>
+              <Download size={16} className="mr-2" /> Export PDF
+            </Button>
+          </div>
+          <div id="pdf-report-container" className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card><CardContent className="pt-6"><div className="uppercase-label">Total Revenue</div><div className="text-3xl font-display font-extrabold mt-2 font-mono">{fmtMoney(daily?.total)}</div></CardContent></Card>
             <Card><CardContent className="pt-6"><div className="uppercase-label">Bills</div><div className="text-3xl font-display font-extrabold mt-2 font-mono">{daily?.count || 0}</div></CardContent></Card>
@@ -276,6 +307,7 @@ export default function ReportsPage() {
               )}
             </CardContent>
           </Card>
+          </div>
         </TabsContent>
 
         <TabsContent value="monthly" className="space-y-4">
