@@ -379,10 +379,7 @@ const searchOptions = currentList.map(it => ({
                 Adding...
                 </>
                 ) : (
-                <>
-                <Lightning size={16} weight="fill" className="mr-2" />
-                Add
-                 </>
+                "Add"
                 )}
               </Button>
 
