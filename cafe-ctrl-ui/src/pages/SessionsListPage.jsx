@@ -11,6 +11,7 @@ import { Lightning, Plus, ArrowRight, BellSimple, BellSimpleSlash } from "@phosp
 import { toast } from "sonner";
 import { playChime, pushNotify, ensureNotificationPermission, ensureMutedFlag, setMuted } from "../lib/notifications";
 import DateTimePicker from "../components/DateTimePicker";
+import { CircleNotchIcon } from "@phosphor-icons/react";
 
 export default function SessionsListPage() {
   const [resources, setResources] = useState([]);
@@ -81,10 +82,13 @@ export default function SessionsListPage() {
     setForm({ customer_name: "", customer_phone: "", resource_id, player_count: pcs[0] || 1, start_time: toLocalInput() });
     setOpenNew(true);
   };
+
+  const [isAddingGame, setIsAddingGame] = useState(false);
+
   const start = async () => {
   try {
     if (!form.customer_name || !form.resource_id) return toast.error("Customer name & resource required");
-    
+    setIsAddingGame
     // Create the cleaned payload
     const payload = {
       customer_name: form.customer_name,
@@ -103,6 +107,8 @@ export default function SessionsListPage() {
     toast.success("Session started");
   } catch (e) { 
     toast.error(formatApiError(e)); 
+  } finally {
+    setIsAddingGame(false);
   }
 };
 
@@ -219,7 +225,15 @@ export default function SessionsListPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpenNew(false)}>Cancel</Button>
-            <Button onClick={start} data-testid="new-cust-start-btn"><Lightning size={16} weight="fill"/> Start</Button>
+            <Button onClick={start} disabled={isAddingGame} data-testid="new-cust-start-btn">
+              {isAddingGame ? (
+                <>
+                <CircleNotchIcon className="animate-spin mr-2" /> : <Lightning size={16} weight="fill" />
+                Starting...
+                </>
+              ):(Start)
+              }
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
