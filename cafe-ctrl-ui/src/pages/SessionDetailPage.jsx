@@ -14,6 +14,7 @@ import ReceiptPrint, { buildReceiptText } from "../components/Receipt";
 import DateTimePicker from "../components/DateTimePicker";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "../components/ui/alert-dialog";
 import LocalSearchableSelect from "../components/LocalSearchableSelect";
+import { CircleNotchIcon } from "@phosphor-icons/react";
 
 export default function SessionDetailPage() {
   const { id } = useParams();
@@ -42,6 +43,7 @@ export default function SessionDetailPage() {
   const [useBackdate, setUseBackdate] = useState(false);
   const [backdateTime, setBackdateTime] = useState(toLocalInput());
   const [isRecalculating, setIsRecalculating] = useState(false);
+  
 
   const canBill = user?.role === "CAFE_ADMIN" || user?.permissions?.includes("billing");
 
@@ -114,10 +116,13 @@ export default function SessionDetailPage() {
     setBackdateTime(newDateTime);
     previewBill(newDateTime); // Re-fetch the subtotal live as they change the time!
   };
-
+  const [isAddingGame, setIsAddingGame] = useState(false);
+  
   const addGame = async () => {
     try {
+      if(isAddingGame) return; // Prevent multiple submissions
       if (!newGame.resource_id) return toast.error("Pick a resource");
+      setIsAddingGame(true);
       await api.post(`/sessions/${id}/games`, {
         resource_id: newGame.resource_id,
         player_count: Number(newGame.player_count) || 1,
@@ -125,6 +130,7 @@ export default function SessionDetailPage() {
       });
       setAddGameOpen(false); load(); toast.success("Game added");
     } catch (e) { toast.error(formatApiError(e)); }
+    finally { setIsAddingGame(false); }
   };
   const endGame = async () => {
     try {
@@ -366,7 +372,20 @@ const searchOptions = currentList.map(it => ({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddGameOpen(false)}>Cancel</Button>
-            <Button onClick={addGame} data-testid="add-game-save">Add</Button>
+            <Button onClick={addGame} data-testid="add-game-save">
+              {isAddingGame ? (
+                <>
+                <CircleNotchIcon className="animate-spin mr-2" />
+                Adding...
+                </>
+                ) : (
+                <>
+                <Lightning size={16} weight="fill" className="mr-2" />
+                Add
+                 </>
+                )}
+              </Button>
+
           </DialogFooter>
         </DialogContent>
       </Dialog>
