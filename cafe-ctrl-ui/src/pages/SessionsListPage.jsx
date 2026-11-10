@@ -87,6 +87,7 @@ export default function SessionsListPage() {
 
   const start = async () => {
   try {
+    if (isAddingGame) return; // Prevent multiple submissions
     if (!form.customer_name || !form.resource_id) return toast.error("Customer name & resource required");
     setIsAddingGame(true)
     // Create the cleaned payload
