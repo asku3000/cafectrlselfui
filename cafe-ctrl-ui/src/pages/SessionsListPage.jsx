@@ -88,7 +88,7 @@ export default function SessionsListPage() {
   const start = async () => {
   try {
     if (!form.customer_name || !form.resource_id) return toast.error("Customer name & resource required");
-    setIsAddingGame
+    setIsAddingGame(true)
     // Create the cleaned payload
     const payload = {
       customer_name: form.customer_name,
@@ -231,7 +231,7 @@ export default function SessionsListPage() {
                 <CircleNotchIcon className="animate-spin mr-2" /> : <Lightning size={16} weight="fill" />
                 Starting...
                 </>
-              ):(Start)
+              ):("Start")
               }
             </Button>
           </DialogFooter>
