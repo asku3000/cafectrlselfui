@@ -40,13 +40,11 @@ import { Download } from "@phosphor-icons/react"; // Add this to your Phosphor i
 export default function ReportsPage() {
   const { cafe } = useAuth();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [auditDate, setAuditDate] = useState(new Date().toISOString().slice(0, 10));
   const [daily, setDaily] = useState(null);
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth() + 1);
   const [monthly, setMonthly] = useState(null);
-  const [audit, setAudit] = useState([]);
   const [billOpen, setBillOpen] = useState(false);
   const [selectedSession, setSelectedSession] = useState(null);
 
@@ -68,22 +66,9 @@ export default function ReportsPage() {
     try { const { data } = await api.get(`/reports/monthly?year=${year}&month=${month}`); setMonthly(data); }
     catch (e) { toast.error(formatApiError(e)); }
   };
-  const loadAudit = async () => {
-    try { 
-      const url = `/audit?date=${auditDate}&limit=200`;
-      const { data } = await api.get(url); 
-      setAudit(data); 
-    } catch (e) { 
-      toast.error(formatApiError(e)); 
-    }
-  };
  
   useEffect(() => { loadDaily(); }, [date]);
   useEffect(() => { loadMonthly(); }, [year, month]);
-   // Change the dependency array from [] to [auditDate]
-  useEffect(() => { 
-    loadAudit(); 
-  }, [auditDate]);
   const dailyByMode = Object.entries(daily?.by_mode || {}).map(([k, v]) => ({ name: k.toUpperCase(), value: v }));
   const monthlyDays = Object.entries(monthly?.by_day || {}).sort().map(([k, v]) => ({ day: k.slice(8), amount: v }));
   const monthlyGames = Object.entries(monthly?.by_game_type || {}).map(([k, v]) => ({ name: k, value: v }));
@@ -117,7 +102,6 @@ export default function ReportsPage() {
           <TabsTrigger value="daily" data-testid="tab-daily">Daily</TabsTrigger>
           <TabsTrigger value="monthly" data-testid="tab-monthly">Monthly</TabsTrigger>
           <TabsTrigger value="memberships" data-testid="tab-memberships">Memberships</TabsTrigger>
-          <TabsTrigger value="audit" data-testid="tab-audit">Audit</TabsTrigger>
         </TabsList>
 
         <TabsContent value="daily" className="space-y-4">
@@ -490,30 +474,6 @@ export default function ReportsPage() {
           <MembershipReport />
         </TabsContent>
 
-        <TabsContent value="audit" className="space-y-4">
-          {/* ---> NEW UI FIX: Date Picker for the Audit Tab <--- */}
-          <div className="flex gap-2 items-center">
-            <span className="uppercase-label">Date</span>
-            <DatePicker value={auditDate} onChange={setAuditDate} data-testid="audit-date-input"/>
-          </div>
-          <Card>
-            <CardHeader><CardTitle className="font-display">Activity Timeline</CardTitle></CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                {audit.map(a => (
-                  <div key={a.id} className="flex gap-4 border-l-2 border-primary/30 pl-4 py-1">
-                    <div className="text-xs text-muted-foreground font-mono w-44">{fmtDateTime(a.created_at)}</div>
-                    <div>
-                      <div className="text-sm"><span className="font-semibold">{a.user_name}</span> <span className="text-muted-foreground">({a.user_role})</span></div>
-                      <div className="text-sm font-mono">{a.action} {a.target && <span className="text-muted-foreground">→ {a.target.slice(0, 8)}</span>}</div>
-                    </div>
-                  </div>
-                ))}
-                {audit.length === 0 && <p className="text-muted-foreground">No activity.</p>}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
       </Tabs>
 
       <Dialog open={billOpen} onOpenChange={setBillOpen}>

@@ -50,6 +50,11 @@ export default function MembershipCardPage() {
         </div>
         <div className="flex gap-2 flex-wrap items-center">
           <CardStatusBadge status={c.status}/>
+          {isAdmin && (
+            <Button variant="ghost" asChild data-testid="card-history-link">
+              <Link to={`/audit-log?entity_type=MEMBERSHIP_CARD&entity_id=${c.id}`}>History</Link>
+            </Button>
+          )}
           {!closed && c.status !== "SUSPENDED" && <Button onClick={() => setRechargeOpen(true)} data-testid="recharge-btn"><ArrowsClockwise size={16}/> Recharge</Button>}
           {isAdmin && !closed && (
             <>

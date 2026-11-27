@@ -27,6 +27,7 @@ import CustomersPage from "./pages/CustomersPage";
 import MembershipPlansPage from "./pages/MembershipPlansPage";
 import MembershipsPage from "./pages/MembershipsPage";
 import MembershipCardPage from "./pages/MembershipCardPage";
+import AuditLogPage from "./pages/AuditLogPage";
 console.log("APP.JS IS LOADED");
 // function Protected({ roles, perm, children }) {
 //   const { user, loading } = useAuth();
@@ -108,6 +109,7 @@ function App() {
               <Route path="/customers" element={<CustomersPage />} />
               <Route path="/memberships" element={<Protected perm="memberships"><MembershipsPage/></Protected>}/>
               <Route path="/memberships/:id" element={<Protected perm="memberships"><MembershipCardPage/></Protected>}/>
+              <Route path="/audit-log" element={<Protected roles={["CAFE_ADMIN"]}><AuditLogPage/></Protected>}/>
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace/>}/>
