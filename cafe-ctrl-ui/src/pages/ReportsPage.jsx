@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, PieChart, Pie, Cell } from "recharts";
 import DatePicker from "../components/DatePicker";
 import MembershipReport from "../components/membership/MembershipReport";
+import { describePayments } from "../components/membership/MembershipBits";
 import ReceiptPrint, { buildReceiptText } from "../components/Receipt";
 import { Printer, WhatsappLogo, ArrowSquareOut, CheckCircle, User,} from "@phosphor-icons/react";
 import { useAuth } from "../contexts/AuthContext";
@@ -185,7 +186,7 @@ export default function ReportsPage() {
                       <td className="px-4 py-2 font-mono">{s.card_number}</td>
                       <td className="px-4 py-2">{s.customer_name}</td>
                       <td className="px-4 py-2">{s.type === "RECHARGE" ? "Recharge" : "New card"} · {s.plan_name}</td>
-                      <td className="px-4 py-2 uppercase text-xs">{s.mode}</td>
+                      <td className="px-4 py-2 text-xs font-mono">{describePayments(s.payments, s.mode)}</td>
                       <td className="px-4 py-2 text-right font-mono">{fmtPaise(s.amount_paise)}</td>
                     </tr>
                   ))}

@@ -9,7 +9,7 @@ import { CalendarBlank } from "@phosphor-icons/react";
  * DatePicker — shadcn calendar (date only). Auto-closes on selection.
  * value/onChange use "YYYY-MM-DD" string.
  */
-export default function DatePicker({ value, onChange, placeholder = "Pick a date", className = "", ...rest }) {
+export default function DatePicker({ value, onChange, placeholder = "Pick a date", className = "", minDate, ...rest }) {
   const [open, setOpen] = React.useState(false);
   const dateObj = value ? new Date(`${value}T00:00:00`) : undefined;
   const pad = (n) => String(n).padStart(2, "0");
@@ -31,7 +31,9 @@ export default function DatePicker({ value, onChange, placeholder = "Pick a date
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0" align="start">
-        <Calendar mode="single" selected={dateObj} onSelect={setDate} initialFocus />
+        <Calendar mode="single" selected={dateObj} onSelect={setDate} initialFocus
+                  defaultMonth={dateObj}
+                  disabled={minDate ? { before: new Date(`${minDate}T00:00:00`) } : undefined} />
       </PopoverContent>
     </Popover>
   );

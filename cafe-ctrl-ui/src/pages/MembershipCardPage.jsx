@@ -10,12 +10,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { ArrowLeft, ArrowsClockwise, PlusMinus, CalendarPlus, Pause, Play, XCircle, Warning } from "@phosphor-icons/react";
 import { toast } from "sonner";
-import { CardStatusBadge, PlanChip, SellCardDialog } from "../components/membership/MembershipBits";
+import { CardStatusBadge, PlanChip, SellCardDialog, describePayments } from "../components/membership/MembershipBits";
+import DatePicker from "../components/DatePicker";
 
 const TYPE_LABEL = {
   LOAD: "Card sold", RECHARGE: "Recharge", BONUS: "Bonus", BILL_DEBIT: "Bill payment", REVERSAL: "Reversal",
   ADJUSTMENT: "Manual adjustment", EXPIRY_FORFEIT: "Expired (forfeit)", RECHARGE_FORFEIT: "Forfeit on recharge",
-  CLOSE_FORFEIT: "Forfeit on close", EXPIRY_EXTENDED: "Expiry extended", SUSPENDED: "Suspended",
+  CLOSE_FORFEIT: "Forfeit on close", EXPIRY_EXTENDED: "Expiry extended", START_DATE_CHANGED: "Start date changed", SUSPENDED: "Suspended",
   REACTIVATED: "Reactivated", CLOSED: "Closed",
 };
 
@@ -53,6 +54,7 @@ export default function MembershipCardPage() {
           {isAdmin && !closed && (
             <>
               <Button variant="outline" onClick={() => setAction("adjust")} data-testid="adjust-btn"><PlusMinus size={16}/> Adjust</Button>
+              {c.status !== "EXPIRED" && <Button variant="outline" onClick={() => setAction("start")} data-testid="start-date-btn"><CalendarPlus size={16}/> Change start</Button>}
               <Button variant="outline" onClick={() => setAction("extend")} data-testid="extend-btn"><CalendarPlus size={16}/> Extend</Button>
               {c.status === "SUSPENDED"
                 ? <Button variant="outline" onClick={() => setAction("REACTIVATE")} data-testid="reactivate-btn"><Play size={16}/> Reactivate</Button>
@@ -144,7 +146,7 @@ export default function MembershipCardPage() {
                   <td className="px-4 py-2 text-right font-mono">{fmtPaise(e.balance_after_paise)}</td>
                   <td className="px-4 py-2 whitespace-nowrap">{e.user_name}</td>
                   <td className="px-4 py-2 text-muted-foreground">
-                    {[e.plan_name && `Plan ${e.plan_name}`, e.payment_mode && `via ${e.payment_mode.toUpperCase()}`, e.note].filter(Boolean).join(" · ")}
+                    {[e.plan_name && `Plan ${e.plan_name}`, e.payment_mode && `via ${describePayments(e.payment_breakdown, e.payment_mode)}`, e.note].filter(Boolean).join(" · ")}
                     {e.session_id && <> · <Link className="underline" to={`/sessions/${e.session_id}`}>bill</Link></>}
                   </td>
                 </tr>
@@ -178,7 +180,7 @@ function Stat({ label, value, sub, accent = "", small }) {
 }
 
 const ACTION_TITLE = {
-  adjust: "Manual adjustment", extend: "Extend expiry", SUSPEND: "Suspend card", REACTIVATE: "Reactivate card", CLOSE: "Close card",
+  adjust: "Manual adjustment", extend: "Extend expiry", start: "Change start date", SUSPEND: "Suspend card", REACTIVATE: "Reactivate card", CLOSE: "Close card",
 };
 
 function AdminActionDialog({ action, card, onClose, onDone }) {
@@ -190,6 +192,7 @@ function AdminActionDialog({ action, card, onClose, onDone }) {
     setForm({
       direction: "CREDIT", paid: "", bonus: "", reason: "",
       new_expiry_date: addDaysISO(card.expiry_date > todayISO() ? card.expiry_date : todayISO(), 30),
+      new_start_date: card.start_date,
     });
   }, [action, card.id]);
 
@@ -208,6 +211,9 @@ function AdminActionDialog({ action, card, onClose, onDone }) {
       url = "adjust"; body = { direction: form.direction, paid_paise: paid, bonus_paise: bonus, reason: form.reason };
     } else if (action === "extend") {
       url = "extend"; body = { new_expiry_date: form.new_expiry_date, reason: form.reason };
+    } else if (action === "start") {
+      if (form.new_start_date === card.start_date) return toast.error("Pick a different start date");
+      url = "start-date"; body = { new_start_date: form.new_start_date, reason: form.reason };
     } else {
       url = "status"; body = { action, reason: form.reason };
     }
@@ -247,6 +253,21 @@ function AdminActionDialog({ action, card, onClose, onDone }) {
               )}
             </div>
           )}
+          {action === "start" && (() => {
+            const bought = String(card.period_purchased_at || "").slice(0, 10) || todayISO();
+            const shift = Math.round((new Date(`${form.new_start_date}T00:00:00`) - new Date(`${card.start_date}T00:00:00`)) / 86400000);
+            const newExpiry = form.new_start_date ? addDaysISO(card.expiry_date, shift) : card.expiry_date;
+            return (
+              <div className="space-y-2">
+                <Label>New start date (currently {fmtDate(card.start_date)})</Label>
+                <div><DatePicker value={form.new_start_date} minDate={bought} onChange={v => set("new_start_date", v)} className="w-full sm:w-56" data-testid="start-date-input"/></div>
+                <div className="text-xs text-muted-foreground">
+                  Valid {fmtDate(form.new_start_date)} → {fmtDate(newExpiry)}. The expiry moves by the same number of days, so the card keeps its full validity.
+                  It can't start before the day it was bought ({fmtDate(bought)}).
+                </div>
+              </div>
+            );
+          })()}
           {action === "CLOSE" && card.total_balance_paise > 0 && (
             <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
               Closing forfeits the remaining <b>{fmtPaise(card.total_balance_paise)}</b>. This can't be undone.
