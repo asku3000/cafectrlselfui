@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { api, formatApiError, fmtMoney, fmtDateTime, fmtDuration, minutesBetween, toLocalInput, fromLocalInput } from "../lib/apiClient";
+import { api, formatApiError, fmtMoney, fmtDateTime, fmtDuration, minutesBetween, toLocalInput, fromLocalInput, fmtPaise, parseHundredths, hundredthsToInput } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -15,6 +15,7 @@ import DateTimePicker from "../components/DateTimePicker";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "../components/ui/alert-dialog";
 import LocalSearchableSelect from "../components/LocalSearchableSelect";
 import { CircleNotchIcon } from "@phosphor-icons/react";
+import MembershipCardPicker, { MemberCardSummary } from "../components/membership/MembershipCardPicker";
 
 export default function SessionDetailPage() {
   const { id } = useParams();
@@ -37,12 +38,33 @@ export default function SessionDetailPage() {
   const [adjustment, setAdjustment] = useState(0);
   const [payments, setPayments] = useState([{ mode: "cash", amount: 0 }]);
   const [notes, setNotes] = useState("");
+  const [cardAmount, setCardAmount] = useState(""); // rupees typed by staff; "" = don't use the card
+  const [undoAction, setUndoAction] = useState(null); // "reopen" | "void"
+  const [undoReason, setUndoReason] = useState("");
+  const [isUndoing, setIsUndoing] = useState(false);
+  const [isClosingBill, setIsClosingBill] = useState(false);
   const [itemPick, setItemPick] = useState({ open: false, gameId: null, type: "inventory", ref_id: "", qty: 1 });
 
   // --- NEW BACKDATE STATES ---
   const [useBackdate, setUseBackdate] = useState(false);
   const [backdateTime, setBackdateTime] = useState(toLocalInput());
   const [isRecalculating, setIsRecalculating] = useState(false);
+
+  // --- MEMBERSHIP CARD TAGGING ---
+  const [tagOpen, setTagOpen] = useState(false);
+  const [tagPick, setTagPick] = useState(null);
+  const [isTagging, setIsTagging] = useState(false);
+  const saveMembershipCard = async (card) => {
+    if (isTagging) return;
+    try {
+      setIsTagging(true);
+      const { data } = await api.put(`/sessions/${id}/membership-card`, { membership_card_id: card ? card.id : null });
+      setSess(data);
+      setTagOpen(false);
+      toast.success(card ? `Card ${card.card_number} tagged` : "Membership card removed");
+    } catch (e) { toast.error(formatApiError(e)); }
+    finally { setIsTagging(false); }
+  };
   
 
   const canBill = user?.role === "CAFE_ADMIN" || user?.permissions?.includes("billing");
@@ -86,7 +108,12 @@ export default function SessionDetailPage() {
       const { data } = await api.get(url); 
       setBill(data); 
       setAdjustment(0); 
-      setPayments([{ mode: "cash", amount: data.grand_total }]); 
+      // Tagged, usable card: default to paying as much as the card covers; the rest goes to the first split
+      const mc = sess?.membership_card;
+      const grandP = Math.round(data.grand_total * 100);
+      const cardP = mc?.usable ? Math.max(0, Math.min(mc.total_balance_paise, grandP)) : 0;
+      setCardAmount(cardP > 0 ? hundredthsToInput(cardP) : "");
+      setPayments([{ mode: "cash", amount: (grandP - cardP) / 100 }]); 
       setBillingOpen(true); 
     } catch (e) { 
       toast.error(formatApiError(e)); 
@@ -96,20 +123,44 @@ export default function SessionDetailPage() {
   };
   // Upgraded to bundle the manual timestamp to the backend
   const checkout = async () => {
+    if (isClosingBill) return; // double-click guard (the server also refuses a second checkout)
     try {
+      setIsClosingBill(true);
       const filtered = payments.filter(p => Number(p.amount) > 0);
-      await api.post(`/sessions/${id}/checkout`, { 
-        adjustment: Number(adjustment || 0), 
-        payments: filtered, 
+      const cardP = cardAmount === "" ? 0 : parseHundredths(cardAmount);
+      await api.post(`/sessions/${id}/checkout`, {
+        adjustment: Number(adjustment || 0),
+        payments: filtered,
         notes,
         // Send the explicit timestamp if toggled on!
-        manual_billed_at: useBackdate ? fromLocalInput(backdateTime) : null
+        // Card bills close at the instant the preview was priced, so the card amount matches the total exactly
+        manual_billed_at: useBackdate ? fromLocalInput(backdateTime) : (cardP > 0 && bill?.priced_until ? bill.priced_until : null),
+        // Only sent when the card is actually used, so non-member checkouts are unchanged
+        ...(cardP > 0 ? { membership_amount_paise: cardP } : {}),
       });
       toast.success("Bill closed successfully!");
       setBillingOpen(false);
       setUseBackdate(false); // reset
       load();
+    } catch (e) {
+      toast.error(formatApiError(e));
+      if (e?.response?.status === 409 && /already/i.test(formatApiError(e))) { setBillingOpen(false); load(); }
+    } finally { setIsClosingBill(false); }
+  };
+
+  const undoBill = async () => {
+    if (isUndoing) return;
+    if (!undoReason.trim()) return toast.error("A reason is required");
+    try {
+      setIsUndoing(true);
+      const { data } = await api.post(`/sessions/${id}/${undoAction}`, { reason: undoReason });
+      setSess(data);
+      toast.success(undoAction === "reopen" ? "Bill reopened. Card payments were returned to the card" : "Bill voided. Card payments were returned to the card");
+      setUndoAction(null);
+      setUndoReason("");
+      load();
     } catch (e) { toast.error(formatApiError(e)); }
+    finally { setIsUndoing(false); }
   };
 
   const handleBackdateChange = (newDateTime) => {
@@ -184,6 +235,27 @@ export default function SessionDetailPage() {
   const recomputed = recalcBill();
   const paySum = payments.reduce((a, p) => a + Number(p.amount || 0), 0);
 
+  // --- membership card part of the payment (all in paise) ---
+  const memberCard = sess?.membership_card || null;
+  const grandPaise = recomputed ? Math.round(recomputed.grand_total * 100) : 0;
+  const cardPaise = cardAmount === "" ? 0 : parseHundredths(cardAmount);
+  const otherPaise = payments.reduce((a, p) => a + Math.round(Number(p.amount || 0) * 100), 0);
+  const cardError =
+    cardPaise == null ? "Enter a valid amount (max 2 decimals)" :
+    cardPaise < 0 ? "Amount can't be negative" :
+    cardPaise > 0 && !memberCard?.usable ? "This card can't be used" :
+    memberCard && cardPaise > memberCard.total_balance_paise ? `More than the card balance (${fmtPaise(memberCard.total_balance_paise)})` :
+    cardPaise > grandPaise ? "More than the bill total" : null;
+  // With a card payment the split must match to the paisa; without one, keep the original tolerance
+  const payMismatch = cardPaise > 0
+    ? otherPaise + cardPaise !== grandPaise
+    : !!recomputed && Math.abs(paySum - recomputed.grand_total) > 0.01;
+  const fillRemaining = () => setPayments(ps => {
+    if (ps.length === 0) return [{ mode: "cash", amount: Math.max(0, grandPaise - (cardPaise || 0)) / 100 }];
+    const rest = ps.slice(1).reduce((a, p) => a + Math.round(Number(p.amount || 0) * 100), 0);
+    return ps.map((p, j) => j === 0 ? { ...p, amount: Math.max(0, grandPaise - (cardPaise || 0) - rest) / 100 } : p);
+  });
+
   const cancelSession = async () => {
     try {
       await api.post(`/sessions/${id}/cancel`);
@@ -205,7 +277,8 @@ const shareWhatsApp = () => {
   if (!sess) return <div className="text-muted-foreground">Loading…</div>;
 
   const isBilled = sess.status === "billed";
-  const isCancelled = sess.status === "cancelled";
+  const isVoided = sess.status === "voided";
+  const isCancelled = sess.status === "cancelled" || isVoided; // a voided bill is closed like a cancelled one
   const isAdmin = user?.role === "CAFE_ADMIN";
   const totalMins = sess.games.reduce((a, g) => a + minutesBetween(g.start_time, g.end_time || new Date()), 0);
   const availableResources = resources.filter(r => !r.active && !sess.games.some(g => g.status === "active" && g.resource_id === r.id));
@@ -254,9 +327,32 @@ const searchOptions = currentList.map(it => ({
               <span className="px-3 py-2 rounded-md bg-emerald-500/15 text-emerald-500 font-bold uppercase tracking-widest text-xs">Billed · {fmtMoney(sess.bill_total)}</span>
             </>
           )}
-          {isCancelled && <span className="px-3 py-2 rounded-md bg-destructive/15 text-destructive font-bold uppercase tracking-widest text-xs">Cancelled</span>}
+          {isBilled && isAdmin && (
+            <>
+              <Button variant="outline" onClick={() => { setUndoReason(""); setUndoAction("reopen"); }} data-testid="reopen-bill-btn">Reopen bill</Button>
+              <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => { setUndoReason(""); setUndoAction("void"); }} data-testid="void-bill-btn">Void bill</Button>
+            </>
+          )}
+          {isCancelled && <span className="px-3 py-2 rounded-md bg-destructive/15 text-destructive font-bold uppercase tracking-widest text-xs">{isVoided ? `Voided · ${fmtMoney(sess.bill_total)}` : "Cancelled"}</span>}
         </div>
       </div>
+
+      {(sess.membership_card || (!isBilled && !isCancelled)) && (
+        <div className="max-w-2xl" data-testid="session-member-card">
+          {sess.membership_card ? (
+            <MemberCardSummary card={sess.membership_card} actions={!isBilled && !isCancelled && (
+              <>
+                <Button size="sm" variant="ghost" className="h-7" onClick={() => { setTagPick(null); setTagOpen(true); }} data-testid="member-card-change">Change</Button>
+                <Button size="sm" variant="ghost" className="h-7 text-destructive hover:text-destructive" disabled={isTagging} onClick={() => saveMembershipCard(null)} data-testid="member-card-remove">Remove</Button>
+              </>
+            )}/>
+          ) : (
+            <Button variant="outline" size="sm" onClick={() => { setTagPick(null); setTagOpen(true); }} data-testid="member-card-tag">
+              + Tag membership card
+            </Button>
+          )}
+        </div>
+      )}
 
       <div className="space-y-4">
         {sess.games.map(g => (
@@ -284,7 +380,7 @@ const searchOptions = currentList.map(it => ({
                   {!isBilled && g.status === "active" && (
                     <Button size="sm" variant="outline" onClick={() => { setEndGameOpen(g.id); setEndTime(toLocalInput()); }} data-testid={`end-${g.id}`}><StopCircle size={14}/> End</Button>
                   )}
-                  {!isBilled && (
+                  {!isBilled && !isCancelled && (
                     <Button size="sm" variant="outline" onClick={() => setItemPick({ open: true, gameId: g.id, type: "inventory", ref_id: "", qty: 1 })} data-testid={`add-item-${g.id}`}><ForkKnife size={14}/> Add Item</Button>
                   )}
                 </div>
@@ -333,11 +429,50 @@ const searchOptions = currentList.map(it => ({
             <Row label="Adjustment" value={fmtMoney(sess.bill_breakdown.adjustment)} />
             <Row label="Total" value={fmtMoney(sess.bill_breakdown.grand_total)} bold />
             <div className="pt-3 border-t border-border space-y-1">
-              {sess.payments.map((p, i) => <Row key={i} label={p.mode.toUpperCase()} value={fmtMoney(p.amount)} />)}
+              {sess.payments.map((p, i) => <Row key={i} label={p.mode === "membership" ? `CARD ${p.card_number}` : p.mode.toUpperCase()} value={fmtMoney(p.amount)} />)}
+              {sess.payments.filter(p => p.mode === "membership").map((p, i) => (
+                <Row key={`bal-${i}`} label={`Card ${p.card_number} balance left`} value={fmtPaise(p.card_balance_after_paise)} />
+              ))}
             </div>
           </CardContent>
         </Card>
       )}
+
+      {/* Reopen / void a billed session (admin) */}
+      <Dialog open={!!undoAction} onOpenChange={v => !v && setUndoAction(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle className="font-display">{undoAction === "reopen" ? "Reopen this bill?" : "Void this bill?"}</DialogTitle></DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p className="text-muted-foreground">
+              {undoAction === "reopen"
+                ? "The session goes back to unbilled so you can correct it and close the bill again."
+                : `The bill of ${fmtMoney(sess.bill_total)} is cancelled and drops out of revenue reports.`}
+              {" "}Any card payment is returned to the card, and unpaid pending amounts from this bill are voided.
+            </p>
+            <div><Label>Reason (required)</Label><Input value={undoReason} maxLength={300} onChange={e => setUndoReason(e.target.value)} data-testid="undo-reason"/></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUndoAction(null)}>Keep bill</Button>
+            <Button variant={undoAction === "void" ? "destructive" : "default"} onClick={undoBill} disabled={isUndoing} data-testid="undo-confirm">
+              {isUndoing ? "Saving…" : undoAction === "reopen" ? "Reopen bill" : "Void bill"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Tag / change membership card */}
+      <Dialog open={tagOpen} onOpenChange={setTagOpen}>
+        <DialogContent className="overflow-visible">
+          <DialogHeader><DialogTitle className="font-display">{sess.membership_card ? "Change membership card" : "Tag membership card"}</DialogTitle></DialogHeader>
+          <MembershipCardPicker value={tagPick} onChange={setTagPick} autoFocus/>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTagOpen(false)}>Cancel</Button>
+            <Button onClick={() => saveMembershipCard(tagPick)} disabled={!tagPick || isTagging} data-testid="member-card-save">
+              {isTagging ? "Saving…" : "Tag card"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Add Game */}
       <Dialog open={addGameOpen} onOpenChange={setAddGameOpen}>
@@ -511,8 +646,26 @@ const searchOptions = currentList.map(it => ({
   )}
 </div>
               </div>
+              {memberCard && (
+                <div className="space-y-2" data-testid="bill-card-section">
+                  <Label>Pay from membership card</Label>
+                  <MemberCardSummary card={memberCard} />
+                  <div className="flex gap-2 items-center flex-wrap">
+                    <Input inputMode="decimal" className="w-40" value={cardAmount} placeholder="0" disabled={!memberCard.usable}
+                           onChange={e => setCardAmount(e.target.value)} data-testid="bill-card-amount"/>
+                    <Button size="sm" variant="outline" disabled={!memberCard.usable}
+                            onClick={() => setCardAmount(hundredthsToInput(Math.max(0, Math.min(memberCard.total_balance_paise, grandPaise))))}
+                            data-testid="bill-card-max">Use max</Button>
+                    <Button size="sm" variant="ghost" onClick={() => setCardAmount("")} data-testid="bill-card-none">Don't use card</Button>
+                  </div>
+                  {cardError && <div className="text-xs text-destructive" data-testid="bill-card-error">{cardError}</div>}
+                  {!cardError && cardPaise > 0 && memberCard && (
+                    <div className="text-xs text-muted-foreground">Card balance after this bill: <span className="font-mono">{fmtPaise(memberCard.total_balance_paise - cardPaise)}</span></div>
+                  )}
+                </div>
+              )}
               <div className="space-y-2">
-                <Label>Payment split</Label>
+                <Label>{memberCard && cardPaise > 0 ? "Remaining amount" : "Payment split"}</Label>
                 {payments.map((p, i) => (
                   <div key={i} className="flex gap-2">
                     <Select value={p.mode} onValueChange={v => setPayments(ps => ps.map((x, j) => j === i ? { ...x, mode: v } : x))}>
@@ -523,10 +676,14 @@ const searchOptions = currentList.map(it => ({
                     {payments.length > 1 && <Button size="icon" variant="ghost" onClick={() => setPayments(ps => ps.filter((_, j) => j !== i))}><Trash size={16}/></Button>}
                   </div>
                 ))}
-                <Button size="sm" variant="outline" onClick={() => setPayments(ps => [...ps, { mode: "upi", amount: 0 }])} data-testid="add-payment-btn"><Plus size={14}/> Add split</Button>
+                <div className="flex gap-2 flex-wrap">
+                  <Button size="sm" variant="outline" onClick={() => setPayments(ps => [...ps, { mode: "upi", amount: 0 }])} data-testid="add-payment-btn"><Plus size={14}/> Add split</Button>
+                  {payMismatch && <Button size="sm" variant="ghost" onClick={fillRemaining} data-testid="fill-remaining-btn">Fill remaining</Button>}
+                </div>
                 <div className="text-xs text-muted-foreground">
+                  {cardPaise > 0 && <>Card: <span className="font-mono">{fmtPaise(cardPaise)}</span> · </>}
                   Paying: <span className="font-mono">{fmtMoney(paySum)}</span> · Required: <span className="font-mono">{fmtMoney(recomputed.grand_total)}</span>
-                  {Math.abs(paySum - recomputed.grand_total) > 0.01 && <span className="text-destructive ml-2">amount mismatch</span>}
+                  {payMismatch && <span className="text-destructive ml-2">amount mismatch</span>}
                 </div>
               </div>
               <Input placeholder="Notes (optional)" value={notes} onChange={e => setNotes(e.target.value)} data-testid="bill-notes-input"/>
@@ -534,8 +691,8 @@ const searchOptions = currentList.map(it => ({
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setBillingOpen(false)}>Cancel</Button>
-            <Button onClick={checkout} disabled={!recomputed || Math.abs(paySum - recomputed.grand_total) > 0.01} data-testid="checkout-btn">
-              Close Bill
+            <Button onClick={checkout} disabled={!recomputed || payMismatch || !!cardError || isClosingBill} data-testid="checkout-btn">
+              {isClosingBill ? "Closing…" : "Close Bill"}
             </Button>
           </DialogFooter>
         </DialogContent>

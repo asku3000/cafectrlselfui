@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api, formatApiError, fmtMoney, fmtDateTime, fmtDuration, minutesBetween } from "../lib/apiClient";
+import { api, formatApiError, fmtMoney, fmtDateTime, fmtDuration, minutesBetween, fmtPaise } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { toast } from "sonner";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, PieChart, Pie, Cell } from "recharts";
 import DatePicker from "../components/DatePicker";
+import MembershipReport from "../components/membership/MembershipReport";
 import ReceiptPrint, { buildReceiptText } from "../components/Receipt";
 import { Printer, WhatsappLogo, ArrowSquareOut, CheckCircle, User,} from "@phosphor-icons/react";
 import { useAuth } from "../contexts/AuthContext";
@@ -114,6 +115,7 @@ export default function ReportsPage() {
         <TabsList>
           <TabsTrigger value="daily" data-testid="tab-daily">Daily</TabsTrigger>
           <TabsTrigger value="monthly" data-testid="tab-monthly">Monthly</TabsTrigger>
+          <TabsTrigger value="memberships" data-testid="tab-memberships">Memberships</TabsTrigger>
           <TabsTrigger value="audit" data-testid="tab-audit">Audit</TabsTrigger>
         </TabsList>
 
@@ -165,6 +167,33 @@ export default function ReportsPage() {
               </table>
             </CardContent>
           </Card>
+          {daily?.membership_sales && daily.membership_sales.length > 0 && (
+          <Card className="border-primary/30 mt-6" data-testid="daily-membership-sales">
+            <CardHeader className="pb-2">
+              <CardTitle className="font-display flex items-center justify-between flex-wrap gap-2">
+                <span>Membership cards sold</span>
+                <span className="font-mono text-base">{fmtMoney(daily.membership_sales_total)}</span>
+              </CardTitle>
+              <div className="text-xs text-muted-foreground">Already included in Total Revenue and in the payment modes above. Bills paid from cards are not counted again.</div>
+            </CardHeader>
+            <CardContent className="p-0 overflow-x-auto">
+              <table className="w-full text-sm">
+                <tbody>
+                  {daily.membership_sales.map(s => (
+                    <tr key={s.entry_id} className="border-b border-border/60 last:border-0">
+                      <td className="px-4 py-2 whitespace-nowrap">{fmtDateTime(s.created_at)}</td>
+                      <td className="px-4 py-2 font-mono">{s.card_number}</td>
+                      <td className="px-4 py-2">{s.customer_name}</td>
+                      <td className="px-4 py-2">{s.type === "RECHARGE" ? "Recharge" : "New card"} · {s.plan_name}</td>
+                      <td className="px-4 py-2 uppercase text-xs">{s.mode}</td>
+                      <td className="px-4 py-2 text-right font-mono">{fmtPaise(s.amount_paise)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+          )}
           {daily?.recovered_debts && daily.recovered_debts.length > 0 && (
           <Card className="border-amber-500/30 mt-6">
             <CardHeader className="bg-amber-500/5 pb-4">
@@ -348,7 +377,7 @@ export default function ReportsPage() {
 <div id="pdf-report-container" className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card><CardContent className="pt-6"><div className="uppercase-label">Revenue</div><div className="text-3xl font-display font-extrabold mt-2 font-mono">{fmtMoney(monthly?.total)}</div></CardContent></Card>
-            <Card><CardContent className="pt-6"><div className="uppercase-label">Bills</div><div className="text-3xl font-display font-extrabold mt-2 font-mono">{monthly?.count || 0}</div></CardContent></Card>
+            <Card><CardContent className="pt-6"><div className="uppercase-label">Bills</div><div className="text-3xl font-display font-extrabold mt-2 font-mono">{monthly?.count || 0}</div>{monthly?.membership_sales_total > 0 && <div className="text-xs text-muted-foreground mt-1" data-testid="monthly-membership-sales">Membership cards: {fmtMoney(monthly.membership_sales_total)} collected ({monthly.membership_cards_sold} sold, {monthly.membership_recharges} recharged), separate from revenue</div>}</CardContent></Card>
             <Card><CardContent className="pt-6"><div className="uppercase-label">Modes</div>
               <div className="flex gap-3 mt-2 flex-wrap">{Object.entries(monthly?.by_mode || {}).map(([k,v]) => <span key={k} className="text-sm font-mono"><span className="text-muted-foreground uppercase tracking-widest text-[0.6rem] mr-1">{k}</span>{fmtMoney(v)}</span>)}</div>
             </CardContent></Card>
@@ -454,6 +483,10 @@ export default function ReportsPage() {
           
         </Card>
         </div>
+        </TabsContent>
+
+        <TabsContent value="memberships" className="space-y-4">
+          <MembershipReport />
         </TabsContent>
 
         <TabsContent value="audit" className="space-y-4">

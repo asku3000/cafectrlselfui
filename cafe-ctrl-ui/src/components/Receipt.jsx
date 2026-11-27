@@ -1,5 +1,5 @@
 import React from "react";
-import { fmtMoney, fmtDateTime, fmtDuration, minutesBetween } from "../lib/apiClient";
+import { fmtMoney, fmtDateTime, fmtDuration, minutesBetween, fmtPaise } from "../lib/apiClient";
 
 export default function Receipt({ session, cafe, bill: liveBill, forceVisible = false }) {
   if (!session) return null;
@@ -76,10 +76,39 @@ export default function Receipt({ session, cafe, bill: liveBill, forceVisible = 
       <div className="r-divider" />
       
       {(bill.payments || session.payments || []).map((p, i) => (
-        <div className="r-line" key={i}><span>{p.mode.toUpperCase()}</span><span>{fmtMoney(p.amount)}</span></div>
+        <div className="r-line" key={i}><span>{payLabel(p)}</span><span>{fmtMoney(p.amount)}</span></div>
       ))}
+      <CardLines payments={bill.payments || session.payments || []} />
       <div className="center" style={{ marginTop: 8 }}>Thank you! Play on. ⚡</div>
     </div>
+  );
+}
+
+// "membership" splits are created by the server and carry the card number and the balance left
+function payLabel(p) {
+  return p.mode === "membership" ? `MEMBER CARD ${p.card_number || ""}`.trim() : p.mode.toUpperCase();
+}
+
+function cardSummary(payments) {
+  const card = payments.filter(p => p.mode === "membership");
+  if (card.length === 0) return null;
+  const fromCard = card.reduce((a, p) => a + Number(p.amount || 0), 0);
+  const other = payments.filter(p => p.mode !== "membership").reduce((a, p) => a + Number(p.amount || 0), 0);
+  const last = card[card.length - 1];
+  return { number: last.card_number, fromCard, other, balanceLeft: last.card_balance_after_paise };
+}
+
+function CardLines({ payments }) {
+  const c = cardSummary(payments);
+  if (!c) return null;
+  return (
+    <>
+      <div className="r-divider" />
+      <div className="r-line"><span>Card</span><span>{c.number}</span></div>
+      <div className="r-line"><span>Paid from card</span><span>{fmtMoney(c.fromCard)}</span></div>
+      <div className="r-line"><span>Paid other modes</span><span>{fmtMoney(c.other)}</span></div>
+      <div className="r-line b"><span>Card balance left</span><span>{fmtPaise(c.balanceLeft)}</span></div>
+    </>
   );
 }
 
@@ -107,7 +136,15 @@ export function buildReceiptText(session, cafe, liveBill) {
   L.push(`*TOTAL: ${fmtMoney(bill.grand_total || 0)}*`);
   
   const payments = bill.payments || session.payments || [];
-  payments.forEach(p => L.push(`${p.mode.toUpperCase()}: ${fmtMoney(p.amount)}`));
+  payments.forEach(p => L.push(`${payLabel(p)}: ${fmtMoney(p.amount)}`));
+  const c = cardSummary(payments);
+  if (c) {
+    L.push("─────────────");
+    L.push(`Card ${c.number}`);
+    L.push(`Paid from card: ${fmtMoney(c.fromCard)}`);
+    L.push(`Paid other modes: ${fmtMoney(c.other)}`);
+    L.push(`*Card balance left: ${fmtPaise(c.balanceLeft)}*`);
+  }
   
   return L.join("\n");
 }

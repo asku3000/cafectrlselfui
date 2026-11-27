@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { playChime, pushNotify, ensureNotificationPermission, ensureMutedFlag, setMuted } from "../lib/notifications";
 import DateTimePicker from "../components/DateTimePicker";
 import { CircleNotchIcon } from "@phosphor-icons/react";
+import MembershipCardPicker from "../components/membership/MembershipCardPicker";
 
 export default function SessionsListPage() {
   const [resources, setResources] = useState([]);
@@ -19,7 +20,7 @@ export default function SessionsListPage() {
   const [rateCards, setRateCards] = useState([]);
   const [openNew, setOpenNew] = useState(false);
   const [muted, setMutedState] = useState(ensureMutedFlag());
-  const [form, setForm] = useState({ customer_name: "", customer_phone: "", resource_id: "", player_count: 1, start_time: toLocalInput() });
+  const [form, setForm] = useState({ customer_name: "", customer_phone: "", resource_id: "", player_count: 1, start_time: toLocalInput(), membership_card: null });
   const notifiedRef = useRef(new Set());
 
   // Map resource_id -> rate card (for player_counts options)
@@ -79,7 +80,7 @@ export default function SessionsListPage() {
 
   const openStart = (resource_id) => {
     const pcs = playerCountsFor(resource_id);
-    setForm({ customer_name: "", customer_phone: "", resource_id, player_count: pcs[0] || 1, start_time: toLocalInput() });
+    setForm({ customer_name: "", customer_phone: "", resource_id, player_count: pcs[0] || 1, start_time: toLocalInput(), membership_card: null });
     setOpenNew(true);
   };
 
@@ -98,6 +99,8 @@ export default function SessionsListPage() {
       player_count: Number(form.player_count) || 1,
       // Pass the state directly to the cleaner
       start_time: fromLocalInput(form.start_time),
+      // Optional: omitted entirely for non-members so the request is exactly as before
+      ...(form.membership_card ? { membership_card_id: form.membership_card.id } : {}),
     };
 
     console.log("Sending payload:", payload); // Debugging: Check console in production!
@@ -177,7 +180,14 @@ export default function SessionsListPage() {
                 return (
                   <Link to={`/sessions/${s.id}`} key={s.id} className="flex items-center justify-between border border-border hover:border-primary rounded-md p-3 transition-colors" data-testid={`active-${s.id}`}>
                     <div>
-                      <div className="font-semibold">{s.customer_name}</div>
+                      <div className="font-semibold flex items-center gap-2">
+                        {s.customer_name}
+                        {s.membership_card && (
+                          <span className="text-[0.6rem] uppercase tracking-widest font-bold px-1.5 py-0.5 rounded bg-primary/15 text-primary" data-testid={`active-member-${s.id}`}>
+                            Member · {s.membership_card.card_number}
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-muted-foreground">{s.customer_phone || "—"} · {s.games.length} game(s) · {fmtDuration(totalMins)}</div>
                       <div className="text-xs text-muted-foreground mt-1">
                         {s.games.map(g => `${g.resource_name}${g.status === "active" ? " ●" : ""}`).join(" · ")}
@@ -196,6 +206,16 @@ export default function SessionsListPage() {
         <DialogContent>
           <DialogHeader><DialogTitle className="font-display">Start new session</DialogTitle></DialogHeader>
           <div className="space-y-4">
+            <div>
+              <Label>Membership card <span className="text-muted-foreground font-normal">(optional)</span></Label>
+              <MembershipCardPicker value={form.membership_card} onChange={(card) => setForm(f => ({
+                ...f,
+                membership_card: card,
+                // Fill the customer from the card only if staff haven't typed one yet
+                customer_name: card && !f.customer_name.trim() ? card.customer_name : f.customer_name,
+                customer_phone: card && !f.customer_phone.trim() ? card.customer_phone : f.customer_phone,
+              }))}/>
+            </div>
             <div><Label>Customer Name</Label><Input value={form.customer_name} onChange={e => setForm(f => ({ ...f, customer_name: e.target.value }))} data-testid="new-cust-name"/></div>
             <div><Label>Phone</Label><Input value={form.customer_phone} onChange={e => setForm(f => ({ ...f, customer_phone: e.target.value }))} data-testid="new-cust-phone"/></div>
             <div>

@@ -15,6 +15,7 @@ const PERMS = [
   { key: "billing", label: "Bill / Checkout" },
   { key: "reports", label: "View Reports" },
   { key: "inventory", label: "Manage Inventory" },
+  { key: "memberships", label: "Sell & View Memberships" },
 ];
 
 export default function StaffPage() {
