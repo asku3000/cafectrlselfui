@@ -6,7 +6,8 @@ import { Button } from "../components/ui/button";
 import {
   HouseSimple, GameController, ClockCounterClockwise, Receipt, ChartBar,
   Users, Package, Storefront, SignOut, Sun, MoonStars, Gear, Lightning,
-  List, X // <-- Added List (Hamburger) and X (Close) icons
+  List, X, // <-- Added List (Hamburger) and X (Close) icons
+  IdentificationCard, Wallet
 } from "@phosphor-icons/react";
 
 const NAV = [
@@ -15,11 +16,13 @@ const NAV = [
   { to: "/game-types", label: "Game Types", icon: GameController, roles: ["CAFE_ADMIN"] },
   { to: "/rate-cards", label: "Rate Cards", icon: Receipt, roles: ["CAFE_ADMIN"] },
   { to: "/resources", label: "Resources", icon: ClockCounterClockwise, roles: ["CAFE_ADMIN"] },
+  { to: "/membership-plans", label: "Membership Plans", icon: IdentificationCard, roles: ["CAFE_ADMIN"] },
   { to: "/inventory", label: "Inventory", icon: Package, roles: ["CAFE_ADMIN", "OPERATOR"], perm: "inventory" },
   { to: "/staff", label: "Staff", icon: Users, roles: ["CAFE_ADMIN"] },
   { to: "/reports", label: "Reports", icon: ChartBar, roles: ["CAFE_ADMIN", "OPERATOR"], perm: "reports" },
   { to: "/cafe-profile", label: "Cafe Profile", icon: Storefront, roles: ["CAFE_ADMIN"] },
   { to: "/customers", label: "Customers", icon: Users, roles: ["CAFE_ADMIN", "OPERATOR"] },
+  { to: "/memberships", label: "Memberships", icon: Wallet, roles: ["CAFE_ADMIN", "OPERATOR"], perm: "memberships" },
 ];
 
 const SUPER_NAV = [

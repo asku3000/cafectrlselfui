@@ -24,6 +24,9 @@ import AuthCallback from "./pages/AuthCallback";
 import AppShell from "./layouts/AppShell";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import CustomersPage from "./pages/CustomersPage";
+import MembershipPlansPage from "./pages/MembershipPlansPage";
+import MembershipsPage from "./pages/MembershipsPage";
+import MembershipCardPage from "./pages/MembershipCardPage";
 console.log("APP.JS IS LOADED");
 // function Protected({ roles, perm, children }) {
 //   const { user, loading } = useAuth();
@@ -94,6 +97,7 @@ function App() {
               <Route path="/game-types" element={<Protected roles={["CAFE_ADMIN"]}><GameTypesPage/></Protected>}/>
               <Route path="/rate-cards" element={<Protected roles={["CAFE_ADMIN"]}><RateCardsPage/></Protected>}/>
               <Route path="/resources" element={<Protected roles={["CAFE_ADMIN"]}><ResourcesPage/></Protected>}/>
+              <Route path="/membership-plans" element={<Protected roles={["CAFE_ADMIN"]}><MembershipPlansPage/></Protected>}/>
               <Route path="/inventory" element={<Protected perm="inventory"><InventoryPage/></Protected>}/>
               <Route path="/staff" element={<Protected roles={["CAFE_ADMIN"]}><StaffPage/></Protected>}/>
               <Route path="/sessions" element={<Protected perm="sessions"><SessionsListPage/></Protected>}/>
@@ -102,6 +106,8 @@ function App() {
               <Route path="/cafe-profile" element={<Protected roles={["CAFE_ADMIN"]}><CafeProfilePage/></Protected>}/>
               <Route path="/change-password" element={<ChangePasswordPage/>}/>
               <Route path="/customers" element={<CustomersPage />} />
+              <Route path="/memberships" element={<Protected perm="memberships"><MembershipsPage/></Protected>}/>
+              <Route path="/memberships/:id" element={<Protected perm="memberships"><MembershipCardPage/></Protected>}/>
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace/>}/>
