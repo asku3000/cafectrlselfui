@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from "react";
-import { api, formatApiError, fmtMoney, fmtDateTime, fmtDuration, minutesBetween, fmtPaise } from "../lib/apiClient";
+import React, { useState } from "react";
+import { useLoadStatus } from "../lib/async/useAsyncData";
+import PageState from "../components/async/PageState";
+import AsyncButton from "../components/async/AsyncButton";
+import { api, fmtMoney, fmtDateTime, fmtDuration, minutesBetween, fmtPaise } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
-import { toast } from "sonner";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, PieChart, Pie, Cell } from "recharts";
 import DatePicker from "../components/DatePicker";
 import MembershipReport from "../components/membership/MembershipReport";
@@ -34,7 +36,7 @@ import { Download } from "@phosphor-icons/react"; // Add this to your Phosphor i
       jsPDF:        { unit: 'in', format: 'a4', orientation: 'portrait' }
     };
 
-    html2pdf().set(opt).from(element).save();
+    return html2pdf().set(opt).from(element).save();
   };
 
 export default function ReportsPage() {
@@ -58,17 +60,15 @@ export default function ReportsPage() {
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  const loadDaily = async () => {
-    try { const { data } = await api.get(`/reports/daily?date=${date}`); setDaily(data); }
-    catch (e) { toast.error(formatApiError(e)); }
-  };
-  const loadMonthly = async () => {
-    try { const { data } = await api.get(`/reports/monthly?year=${year}&month=${month}`); setMonthly(data); }
-    catch (e) { toast.error(formatApiError(e)); }
-  };
- 
-  useEffect(() => { loadDaily(); }, [date]);
-  useEffect(() => { loadMonthly(); }, [year, month]);
+  // a slow answer for an earlier date/month never overwrites the one being looked at
+  const dailyStatus = useLoadStatus(async ({ isStale }) => {
+    const { data } = await api.get(`/reports/daily?date=${date}`);
+    if (!isStale()) setDaily(data);
+  }, [date]);
+  const monthlyStatus = useLoadStatus(async ({ isStale }) => {
+    const { data } = await api.get(`/reports/monthly?year=${year}&month=${month}`);
+    if (!isStale()) setMonthly(data);
+  }, [year, month]);
   const dailyByMode = Object.entries(daily?.by_mode || {}).map(([k, v]) => ({ name: k.toUpperCase(), value: v }));
   const monthlyDays = Object.entries(monthly?.by_day || {}).sort().map(([k, v]) => ({ day: k.slice(8), amount: v }));
   const monthlyGames = Object.entries(monthly?.by_game_type || {}).map(([k, v]) => ({ name: k, value: v }));
@@ -115,10 +115,11 @@ export default function ReportsPage() {
               <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
             </div>
     
-            <Button variant="outline" className="bg-primary/5 hover:bg-primary/10" onClick={() => exportToPDF(`Daily_${date}`)}>
+            <AsyncButton variant="outline" className="bg-primary/5 hover:bg-primary/10" lockKey="report-export" onClick={() => exportToPDF(`Daily_${date}`)} data-testid="report-daily-export">
               <Download size={16} className="mr-2" /> Export PDF
-            </Button>
+            </AsyncButton>
           </div>
+          <PageState loading={dailyStatus.loading} error={dailyStatus.error} data={dailyStatus.loaded ? daily : undefined} isEmpty={false} onRetry={dailyStatus.reload} skeletonRows={6}>
           <div id="pdf-report-container" className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card><CardContent className="pt-6"><div className="uppercase-label">Total Revenue</div><div className="text-3xl font-display font-extrabold mt-2 font-mono">{fmtMoney(daily?.total)}</div></CardContent></Card>
@@ -322,6 +323,7 @@ export default function ReportsPage() {
             </CardContent>
           </Card>
           </div>
+          </PageState>
         </TabsContent>
 
         <TabsContent value="monthly" className="space-y-4">
@@ -355,10 +357,11 @@ export default function ReportsPage() {
       {">"}
     </Button>
   </div>
-  <Button variant="outline" className="bg-primary/5 hover:bg-primary/10" onClick={() => exportToPDF(`Monthly_${month}_${year}`)}>
+  <AsyncButton variant="outline" className="bg-primary/5 hover:bg-primary/10" lockKey="report-export" onClick={() => exportToPDF(`Monthly_${month}_${year}`)} data-testid="report-monthly-export">
       <Download size={16} className="mr-2" /> Export PDF
-    </Button>
+    </AsyncButton>
 </div>
+<PageState loading={monthlyStatus.loading} error={monthlyStatus.error} data={monthlyStatus.loaded ? monthly : undefined} isEmpty={false} onRetry={monthlyStatus.reload} skeletonRows={6}>
 <div id="pdf-report-container" className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card><CardContent className="pt-6"><div className="uppercase-label">Revenue</div><div className="text-3xl font-display font-extrabold mt-2 font-mono">{fmtMoney(monthly?.total)}</div></CardContent></Card>
@@ -468,6 +471,7 @@ export default function ReportsPage() {
           
         </Card>
         </div>
+</PageState>
         </TabsContent>
 
         <TabsContent value="memberships" className="space-y-4">

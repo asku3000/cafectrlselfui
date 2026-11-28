@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { api, formatApiError, fmtPaise, fmtDate, todayISO, addDaysISO, newRequestId, parseHundredths, hundredthsToInput } from "../../lib/apiClient";
+import AsyncForm, { SubmitButton } from "../async/AsyncForm";
+import { api, fmtPaise, fmtDate, todayISO, addDaysISO, parseHundredths, hundredthsToInput, withIdempotency, formatApiError } from "../../lib/apiClient";
+import { useLockHeld } from "../../lib/async/actionLocks";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
@@ -55,14 +57,13 @@ export function SellCardDialog({ open, onOpenChange, card = null, onDone }) {
   const isRecharge = !!card;
   const [plans, setPlans] = useState([]);
   const [form, setForm] = useState(null);
-  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setForm({
       customer_name: "", customer_phone: "", plan_id: card?.plan_id || "",
       payments: [{ mode: "cash", amount: "" }],
-      start_date: todayISO(), note: "", request_id: newRequestId(), confirmForfeit: false,
+      start_date: todayISO(), note: "", confirmForfeit: false,
     });
     api.get("/membership/plans")
       .then(({ data }) => setPlans(data.filter(p => p.is_active)))
@@ -75,9 +76,12 @@ export function SellCardDialog({ open, onOpenChange, card = null, onDone }) {
   useEffect(() => {
     if (!plan) return;
     setForm(f => f && ({ ...f, payments: [{ mode: f.payments[0]?.mode || "cash", amount: hundredthsToInput(plan.load_amount_paise) }] }));
-  }, [plan?.id, form?.request_id]);
+  }, [plan?.id, open]);
 
   const forfeit = isRecharge ? card.total_balance_paise : 0;
+  // A recharge shares the card's lock with the card page's admin actions
+  const lockKey = isRecharge ? `card:${card.id}` : "card-sale";
+  const busy = useLockHeld(lockKey);
 
   if (!form) return null;
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -105,40 +109,39 @@ export function SellCardDialog({ open, onOpenChange, card = null, onDone }) {
     return { ...f, payments: f.payments.map((p, j) => j === f.payments.length - 1 ? { ...p, amount: hundredthsToInput(last) } : p) };
   });
 
-  const submit = async () => {
-    if (saving) return;
+  // The per-click idempotency key doubles as the sale's request_id (the ledger refuses a second sale with it)
+  const submit = async ({ idempotencyKey }) => {
     if (!isRecharge && (!form.customer_name.trim() || !form.customer_phone.trim())) return toast.error("Name and phone are required");
     if (!plan) return toast.error("Choose a plan");
     if (lineError) return toast.error(lineError);
     if (mismatch) return toast.error(`Payments add up to ${fmtPaise(paidSum)}, but the plan price is ${fmtPaise(price)}`);
     if (startError) return toast.error(startError);
     if (forfeit > 0 && !form.confirmForfeit) return toast.error("Confirm the balance that will be forfeited");
-    try {
-      setSaving(true);
-      const body = {
-        plan_id: form.plan_id,
-        payments: lines.map(l => ({ mode: l.mode, amount_paise: l.paise })),
-        start_date: form.start_date,
-        note: form.note, request_id: form.request_id,
-      };
-      const { data } = isRecharge
-        ? await api.post(`/membership/cards/${card.id}/recharge`, { ...body, expected_forfeit_paise: forfeit })
-        : await api.post("/membership/cards", { ...body, customer_name: form.customer_name, customer_phone: form.customer_phone });
-      toast.success(isRecharge ? `Recharged ${data.card_number}` : `Card ${data.card_number} issued to ${data.customer_name}`);
-      onOpenChange(false);
-      onDone?.(data);
-    } catch (e) { toast.error(formatApiError(e)); }
-    finally { setSaving(false); }
+    const body = {
+      plan_id: form.plan_id,
+      payments: lines.map(l => ({ mode: l.mode, amount_paise: l.paise })),
+      start_date: form.start_date,
+      note: form.note, request_id: idempotencyKey,
+    };
+    const idem = withIdempotency(idempotencyKey);
+    const { data } = isRecharge
+      ? await api.post(`/membership/cards/${card.id}/recharge`, { ...body, expected_forfeit_paise: forfeit }, idem)
+      : await api.post("/membership/cards", { ...body, customer_name: form.customer_name, customer_phone: form.customer_phone }, idem);
+    toast.success(isRecharge ? `Recharged ${data.card_number}` : `Card ${data.card_number} issued to ${data.customer_name}`);
+    onOpenChange(false);
+    onDone?.(data);
   };
 
-  const canSubmit = !saving && plan && !lineError && !mismatch && !startError && !(forfeit > 0 && !form.confirmForfeit);
+  const canSubmit = plan && !lineError && !mismatch && !startError && !(forfeit > 0 && !form.confirmForfeit);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={v => !busy && onOpenChange(v)}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="font-display">{isRecharge ? `Recharge ${card.card_number}` : "Sell membership card"}</DialogTitle>
         </DialogHeader>
+        <AsyncForm onSubmit={submit} lockKey={lockKey} idempotent className="grid gap-4"
+                   timeoutMessage="We couldn't confirm in time. Check the card's history; pressing the button again is safe.">
         <div className="space-y-4 max-h-[65vh] overflow-y-auto pr-1">
           {!isRecharge && (
             <div className="grid grid-cols-2 gap-3">
@@ -223,11 +226,12 @@ export function SellCardDialog({ open, onOpenChange, card = null, onDone }) {
           <div><Label>Note (optional)</Label><Input value={form.note} maxLength={500} onChange={e => set("note", e.target.value)} data-testid="sell-note"/></div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={!canSubmit} data-testid="sell-submit">
-            {saving ? "Saving…" : isRecharge ? "Recharge" : "Sell card"}
-          </Button>
+          <Button variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>Cancel</Button>
+          <SubmitButton disabled={!canSubmit} data-testid="sell-submit">
+            {isRecharge ? "Recharge" : "Sell card"}
+          </SubmitButton>
         </DialogFooter>
+        </AsyncForm>
       </DialogContent>
     </Dialog>
   );

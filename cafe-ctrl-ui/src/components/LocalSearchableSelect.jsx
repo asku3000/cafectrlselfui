@@ -19,6 +19,7 @@ export default function LocalSearchableSelect({ options, value, onValueChange, p
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
+          type="button"
           role="combobox"
           aria-expanded={open}
           className="flex w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm hover:bg-accent hover:text-accent-foreground focus:outline-none focus:ring-1 focus:ring-ring"

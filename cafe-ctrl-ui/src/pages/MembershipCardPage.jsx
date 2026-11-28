@@ -1,6 +1,10 @@
 import React, { useEffect, useState } from "react";
+import { useLoadStatus } from "../lib/async/useAsyncData";
+import PageState from "../components/async/PageState";
+import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
 import { Link, useParams } from "react-router-dom";
-import { api, formatApiError, fmtPaise, fmtDate, fmtDateTime, parseHundredths, addDaysISO, todayISO } from "../lib/apiClient";
+import { api, fmtPaise, fmtDate, fmtDateTime, parseHundredths, addDaysISO, todayISO, withIdempotency } from "../lib/apiClient";
+import { useLockHeld } from "../lib/async/actionLocks";
 import { useAuth } from "../contexts/AuthContext";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -27,14 +31,17 @@ export default function MembershipCardPage() {
   const [data, setData] = useState(null);
   const [rechargeOpen, setRechargeOpen] = useState(false);
   const [action, setAction] = useState(null); // "adjust" | "extend" | "SUSPEND" | "REACTIVATE" | "CLOSE"
+  const cardBusy = useCardBusy(id); // every action on this card shares one lock
 
-  const load = async () => {
-    try { const { data } = await api.get(`/membership/cards/${id}`); setData(data); }
-    catch (e) { toast.error(formatApiError(e)); }
+  const fetchPage = async ({ isStale }) => {
+    const { data } = await api.get(`/membership/cards/${id}`);
+    if (!isStale()) setData(data);
   };
-  useEffect(() => { load(); }, [id]);
+  const { reload: load, ...status } = useLoadStatus(fetchPage, [id]);
 
-  if (!data) return <div className="text-muted-foreground">Loading…</div>;
+  if (!data || String(data.card?.id) !== String(id)) {
+    return <PageState loading={status.loading} error={status.error} data={undefined} onRetry={load} skeletonRows={5} />;
+  }
   const c = data.card;
   const closed = c.status === "CLOSED";
 
@@ -55,16 +62,16 @@ export default function MembershipCardPage() {
               <Link to={`/audit-log?entity_type=MEMBERSHIP_CARD&entity_id=${c.id}`}>History</Link>
             </Button>
           )}
-          {!closed && c.status !== "SUSPENDED" && <Button onClick={() => setRechargeOpen(true)} data-testid="recharge-btn"><ArrowsClockwise size={16}/> Recharge</Button>}
+          {!closed && c.status !== "SUSPENDED" && <Button disabled={cardBusy} onClick={() => setRechargeOpen(true)} data-testid="recharge-btn"><ArrowsClockwise size={16}/> Recharge</Button>}
           {isAdmin && !closed && (
             <>
-              <Button variant="outline" onClick={() => setAction("adjust")} data-testid="adjust-btn"><PlusMinus size={16}/> Adjust</Button>
-              {c.status !== "EXPIRED" && <Button variant="outline" onClick={() => setAction("start")} data-testid="start-date-btn"><CalendarPlus size={16}/> Change start</Button>}
-              <Button variant="outline" onClick={() => setAction("extend")} data-testid="extend-btn"><CalendarPlus size={16}/> Extend</Button>
+              <Button variant="outline" disabled={cardBusy} onClick={() => setAction("adjust")} data-testid="adjust-btn"><PlusMinus size={16}/> Adjust</Button>
+              {c.status !== "EXPIRED" && <Button variant="outline" disabled={cardBusy} onClick={() => setAction("start")} data-testid="start-date-btn"><CalendarPlus size={16}/> Change start</Button>}
+              <Button variant="outline" disabled={cardBusy} onClick={() => setAction("extend")} data-testid="extend-btn"><CalendarPlus size={16}/> Extend</Button>
               {c.status === "SUSPENDED"
-                ? <Button variant="outline" onClick={() => setAction("REACTIVATE")} data-testid="reactivate-btn"><Play size={16}/> Reactivate</Button>
-                : c.status !== "EXPIRED" && <Button variant="outline" onClick={() => setAction("SUSPEND")} data-testid="suspend-btn"><Pause size={16}/> Suspend</Button>}
-              <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => setAction("CLOSE")} data-testid="close-btn"><XCircle size={16}/> Close</Button>
+                ? <Button variant="outline" disabled={cardBusy} onClick={() => setAction("REACTIVATE")} data-testid="reactivate-btn"><Play size={16}/> Reactivate</Button>
+                : c.status !== "EXPIRED" && <Button variant="outline" disabled={cardBusy} onClick={() => setAction("SUSPEND")} data-testid="suspend-btn"><Pause size={16}/> Suspend</Button>}
+              <Button variant="outline" disabled={cardBusy} className="text-destructive hover:text-destructive" onClick={() => setAction("CLOSE")} data-testid="close-btn"><XCircle size={16}/> Close</Button>
             </>
           )}
         </div>
@@ -167,6 +174,11 @@ export default function MembershipCardPage() {
   );
 }
 
+/** Header buttons: disabled while any action on this card runs. A component so the hook is unconditional. */
+function useCardBusy(cardId) {
+  return useLockHeld(cardId ? `card:${cardId}` : null);
+}
+
 function Signed({ v }) {
   if (!v) return <span className="text-muted-foreground">—</span>;
   return <span className={v > 0 ? "text-emerald-500" : "text-destructive"}>{v > 0 ? "+" : ""}{fmtPaise(v)}</span>;
@@ -190,7 +202,8 @@ const ACTION_TITLE = {
 
 function AdminActionDialog({ action, card, onClose, onDone }) {
   const [form, setForm] = useState({});
-  const [saving, setSaving] = useState(false);
+  const lockKey = `card:${card.id}`;
+  const busy = useLockHeld(lockKey);
 
   useEffect(() => {
     if (!action) return;
@@ -204,8 +217,7 @@ function AdminActionDialog({ action, card, onClose, onDone }) {
   if (!action) return null;
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
-  const submit = async () => {
-    if (saving) return;
+  const submit = async ({ idempotencyKey }) => {
     if (!form.reason?.trim()) return toast.error("A reason is required");
     let url, body;
     if (action === "adjust") {
@@ -222,19 +234,16 @@ function AdminActionDialog({ action, card, onClose, onDone }) {
     } else {
       url = "status"; body = { action, reason: form.reason };
     }
-    try {
-      setSaving(true);
-      await api.post(`/membership/cards/${card.id}/${url}`, body);
-      toast.success(`${ACTION_TITLE[action]} done`);
-      onClose(); onDone();
-    } catch (e) { toast.error(formatApiError(e)); }
-    finally { setSaving(false); }
+    await api.post(`/membership/cards/${card.id}/${url}`, body, withIdempotency(idempotencyKey));
+    toast.success(`${ACTION_TITLE[action]} done`);
+    onClose(); onDone();
   };
 
   return (
-    <Dialog open={!!action} onOpenChange={v => !v && onClose()}>
+    <Dialog open={!!action} onOpenChange={v => !v && !busy && onClose()}>
       <DialogContent>
         <DialogHeader><DialogTitle className="font-display">{ACTION_TITLE[action]} — {card.card_number}</DialogTitle></DialogHeader>
+        <AsyncForm onSubmit={submit} lockKey={lockKey} idempotent className="grid gap-4">
         <div className="space-y-4">
           {action === "adjust" && (
             <>
@@ -281,9 +290,10 @@ function AdminActionDialog({ action, card, onClose, onDone }) {
           <div><Label>Reason (required)</Label><Input value={form.reason || ""} maxLength={500} onChange={e => set("reason", e.target.value)} data-testid="action-reason"/></div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={submit} disabled={saving} variant={action === "CLOSE" ? "destructive" : "default"} data-testid="action-submit">{saving ? "Saving…" : "Confirm"}</Button>
+          <Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
+          <SubmitButton variant={action === "CLOSE" ? "destructive" : "default"} data-testid="action-submit">Confirm</SubmitButton>
         </DialogFooter>
+          </AsyncForm>
       </DialogContent>
     </Dialog>
   );

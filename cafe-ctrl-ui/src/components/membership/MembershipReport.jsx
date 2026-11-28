@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { api, formatApiError, fmtPaise, fmtDate, todayISO } from "../../lib/apiClient";
+import PageState from "../async/PageState";
+import { api, fmtPaise, fmtDate, todayISO } from "../../lib/apiClient";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import DatePicker from "../DatePicker";
@@ -12,19 +13,21 @@ export default function MembershipReport() {
   const [from, setFrom] = useState(firstOfMonth());
   const [to, setTo] = useState(todayISO());
   const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     if (!from || !to) return;
-    if (to < from) { toast.error("'To' must be on or after 'From'"); return; }
+    if (to < from) { toast.error("'To' must be on or after 'From'"); setLoading(false); return; }
     let cancelled = false;
     setLoading(true);
     api.get("/membership/reports", { params: { from, to } })
-      .then(({ data }) => { if (!cancelled) setData(data); })
-      .catch(e => { if (!cancelled) toast.error(formatApiError(e)); })
+      .then(({ data }) => { if (!cancelled) { setData(data); setError(null); } })
+      .catch(e => { if (!cancelled) setError(e); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [from, to]);
+  }, [from, to, retryKey]);
 
   const preset = (f, t) => { setFrom(f); setTo(t); };
 
@@ -38,9 +41,10 @@ export default function MembershipReport() {
           <Button size="sm" variant="ghost" onClick={() => preset(firstOfMonth(), todayISO())}>This month</Button>
           <Button size="sm" variant="ghost" onClick={() => preset(todayISO(-29), todayISO())}>Last 30 days</Button>
         </div>
-        {loading && <span className="text-xs text-muted-foreground animate-pulse">loading…</span>}
+        {loading && data && <span className="text-xs text-muted-foreground animate-pulse">loading…</span>}
       </div>
 
+      <PageState loading={loading} error={error} data={data ?? undefined} isEmpty={false} onRetry={() => setRetryKey(k => k + 1)} skeletonRows={4}>
       {data && (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -109,6 +113,7 @@ export default function MembershipReport() {
           </Card>
         </>
       )}
+      </PageState>
     </div>
   );
 }

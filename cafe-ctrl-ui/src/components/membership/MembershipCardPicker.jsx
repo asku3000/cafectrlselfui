@@ -94,7 +94,14 @@ export default function MembershipCardPicker({ value, onChange, autoFocus = fals
     <div className="relative" ref={boxRef}>
       <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"/>
       <Input className="pl-9 pr-9" placeholder="Search phone, name or card number" value={q} autoFocus={autoFocus}
-             onChange={e => setQ(e.target.value)} onFocus={() => results.length && setOpen(true)} data-testid="member-card-search"/>
+             onChange={e => setQ(e.target.value)} onFocus={() => results.length && setOpen(true)}
+             onKeyDown={e => {
+               if (e.key !== "Enter") return;
+               e.preventDefault();
+               const first = results.find(r => r.usable);
+               if (first) { onChange(first); setQ(""); setResults([]); setOpen(false); }
+             }}
+             data-testid="member-card-search"/>
       {loading && <CircleNotch size={16} className="animate-spin absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"/>}
       {open && q.trim().length >= 2 && !loading && (
         <div className="absolute z-50 mt-1 w-full max-h-72 overflow-y-auto rounded-md border border-border bg-popover shadow-lg" data-testid="member-card-results">
