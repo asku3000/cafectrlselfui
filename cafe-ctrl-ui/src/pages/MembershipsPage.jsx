@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import PageState from "../components/async/PageState";
 import { useNavigate } from "react-router-dom";
 import { api, formatApiError, fmtPaise, fmtDate, fmtDateTime } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
@@ -34,6 +35,8 @@ export default function MembershipsPage() {
   const [summary, setSummary] = useState(null);
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState(null);
+  const [listLoaded, setListLoaded] = useState(false);
   const [sellOpen, setSellOpen] = useState(false);
 
   const [q, setQ] = useState("");
@@ -53,6 +56,7 @@ export default function MembershipsPage() {
   }, [refreshKey]);
 
   useEffect(() => {
+    let stale = false;
     const t = setTimeout(async () => {
       try {
         setLoading(true);
@@ -62,11 +66,12 @@ export default function MembershipsPage() {
         if (expiring) params.expiring_within_days = 7;
         if (low) params.low_balance = true;
         const { data } = await api.get("/membership/cards", { params });
-        setCards(data);
-      } catch (e) { toast.error(formatApiError(e)); }
-      finally { setLoading(false); }
+        if (stale) return; // a newer search replaced this one
+        setCards(data); setListError(null); setListLoaded(true);
+      } catch (e) { if (!stale) setListError(e); }
+      finally { if (!stale) setLoading(false); }
     }, q ? 250 : 0);
-    return () => clearTimeout(t);
+    return () => { stale = true; clearTimeout(t); };
   }, [q, status, planId, expiring, low, refreshKey]);
 
   const sorted = useMemo(() => {
@@ -138,6 +143,8 @@ export default function MembershipsPage() {
         {filtered && <Button variant="ghost" size="sm" onClick={clearFilters} data-testid="filter-clear">Clear</Button>}
       </div>
 
+      <PageState loading={loading} error={listError} data={listLoaded ? cards : undefined} isEmpty={false}
+                 onRetry={() => setRefreshKey(k => k + 1)} skeletonRows={6}>
       <Card>
         <CardContent className="p-0 overflow-x-auto">
           <table className="w-full text-sm">
@@ -181,6 +188,7 @@ export default function MembershipsPage() {
           )}
         </CardContent>
       </Card>
+      </PageState>
 
       <SellCardDialog open={sellOpen} onOpenChange={setSellOpen}
                       onDone={(c) => { setRefreshKey(k => k + 1); navigate(`/memberships/${c.id}`); }} />

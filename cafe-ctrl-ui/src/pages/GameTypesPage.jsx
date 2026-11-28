@@ -1,28 +1,33 @@
-import React, { useEffect, useState } from "react";
-import { api, formatApiError } from "../lib/apiClient";
+import React, { useState } from "react";
+import { useLoadStatus } from "../lib/async/useAsyncData";
+import PageState from "../components/async/PageState";
+import DeleteButton from "../components/async/DeleteButton";
+import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
+import { api, deleteIfExists, withIdempotency } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Trash, Plus } from "@phosphor-icons/react";
+import { Plus } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
 export default function GameTypesPage() {
   const [items, setItems] = useState([]);
   const [name, setName] = useState("");
 
-  const load = async () => {
-    try { const { data } = await api.get("/game-types"); setItems(data); } catch (e) { toast.error(formatApiError(e)); }
+  const fetchPage = async () => {
+    const { data } = await api.get("/game-types"); setItems(data);
   };
-  useEffect(() => { load(); }, []);
+  const { reload: load, ...status } = useLoadStatus(fetchPage);
 
-  const add = async () => {
+  const add = async ({ idempotencyKey }) => {
     if (!name.trim()) return;
-    try { await api.post("/game-types", { name }); setName(""); load(); toast.success("Added"); }
-    catch (e) { toast.error(formatApiError(e)); }
+    await api.post("/game-types", { name }, withIdempotency(idempotencyKey));
+    setName(""); load(); toast.success("Added");
   };
-  const remove = async (id) => {
-    try { await api.delete(`/game-types/${id}`); load(); toast.success("Removed"); }
-    catch (e) { toast.error(formatApiError(e)); }
+  const remove = async (it, idempotencyKey) => {
+    const deleted = await deleteIfExists(`/game-types/${it.id}`, withIdempotency(idempotencyKey));
+    load();
+    toast.success(deleted ? "Removed" : `${it.name} was already removed`);
   };
 
   const presets = ["Pool", "PS5", "Xbox", "Air Hockey", "Foosball", "Snooker"].filter(p => !items.some(i => i.name.toLowerCase() === p.toLowerCase()));
@@ -42,12 +47,13 @@ export default function GameTypesPage() {
               <Button key={p} size="sm" variant="outline" onClick={() => setName(p)} data-testid={`preset-${p}`}>{p}</Button>
             ))}
           </div>
-          <div className="flex gap-2">
+          <AsyncForm onSubmit={add} lockKey="gametype-add" idempotent className="flex gap-2">
             <Input placeholder="Game type (e.g. Snooker)" value={name} onChange={e => setName(e.target.value)} data-testid="gametype-input"/>
-            <Button onClick={add} data-testid="gametype-add-btn"><Plus size={16}/> Add</Button>
-          </div>
+            <SubmitButton data-testid="gametype-add-btn"><Plus size={16}/> Add</SubmitButton>
+          </AsyncForm>
         </CardContent>
       </Card>
+      <PageState loading={status.loading} error={status.error} data={status.loaded ? items : undefined} onRetry={load} emptyText="No game types yet." skeletonRows={3}>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {items.map(it => (
           <Card key={it.id} className="hover-lift" data-testid={`gametype-${it.id}`}>
@@ -55,14 +61,12 @@ export default function GameTypesPage() {
               <div>
                 <div className="font-semibold text-lg">{it.name}</div>
               </div>
-              <Button size="icon" variant="ghost" onClick={() => remove(it.id)} data-testid={`gametype-delete-${it.id}`}>
-                <Trash size={18}/>
-              </Button>
+              <DeleteButton what={`game type ${it.name}`} size={18} lockKey={`gametype:${it.id}`} onDelete={({ idempotencyKey }) => remove(it, idempotencyKey)} testId={`gametype-delete-${it.id}`} />
             </CardContent>
           </Card>
         ))}
-        {items.length === 0 && <p className="text-muted-foreground col-span-full">No game types yet.</p>}
       </div>
+      </PageState>
     </div>
   );
 }

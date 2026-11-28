@@ -1,12 +1,17 @@
-import React, { useEffect, useState } from "react";
-import { api, formatApiError } from "../lib/apiClient";
+import React, { useState } from "react";
+import { useLoadStatus } from "../lib/async/useAsyncData";
+import PageState from "../components/async/PageState";
+import { useLockHeld } from "../lib/async/actionLocks";
+import DeleteButton from "../components/async/DeleteButton";
+import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
+import { api, deleteIfExists, withIdempotency } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
-import { Plus, Trash, PencilSimple } from "@phosphor-icons/react";
+import { Plus, PencilSimple } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
 export default function ResourcesPage() {
@@ -14,31 +19,30 @@ export default function ResourcesPage() {
   const [gts, setGts] = useState([]);
   const [rcs, setRcs] = useState([]);
   const [open, setOpen] = useState(false);
+  const saving = useLockHeld("resource-save");
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ name: "", game_type_id: "", rate_card_id: "" });
 
-  const load = async () => {
-    try {
-      const [r, g, c] = await Promise.all([api.get("/resources"), api.get("/game-types"), api.get("/rate-cards")]);
-      setRows(r.data); setGts(g.data); setRcs(c.data);
-    } catch (e) { toast.error(formatApiError(e)); }
+  const fetchPage = async () => {
+    const [r, g, c] = await Promise.all([api.get("/resources"), api.get("/game-types"), api.get("/rate-cards")]);
+    setRows(r.data); setGts(g.data); setRcs(c.data);
   };
-  useEffect(() => { load(); }, []);
+  const { reload: load, ...status } = useLoadStatus(fetchPage);
 
   const openNew = () => { setEditing(null); setForm({ name: "", game_type_id: "", rate_card_id: "" }); setOpen(true); };
   const openEdit = (r) => { setEditing(r); setForm({ name: r.name, game_type_id: r.game_type_id, rate_card_id: r.rate_card_id }); setOpen(true); };
 
-  const save = async () => {
+  const save = async ({ idempotencyKey }) => {
     if (!form.game_type_id || !form.rate_card_id || !form.name) return toast.error("All fields required");
-    try {
-      if (editing) await api.put(`/resources/${editing.id}`, form);
-      else await api.post("/resources", form);
-      setOpen(false); load(); toast.success("Saved");
-    } catch (e) { toast.error(formatApiError(e)); }
+    if (editing) await api.put(`/resources/${editing.id}`, form, withIdempotency(idempotencyKey));
+    else await api.post("/resources", form, withIdempotency(idempotencyKey));
+    setOpen(false); load(); toast.success("Saved");
   };
 
-  const remove = async (id) => {
-    try { await api.delete(`/resources/${id}`); load(); toast.success("Deleted"); } catch (e) { toast.error(formatApiError(e)); }
+  const remove = async (r, idempotencyKey) => {
+    const deleted = await deleteIfExists(`/resources/${r.id}`, withIdempotency(idempotencyKey));
+    load();
+    toast.success(deleted ? "Deleted" : `${r.name} was already deleted`);
   };
 
   const filteredRcs = rcs.filter(rc => !form.game_type_id || rc.game_type_id === form.game_type_id);
@@ -54,6 +58,7 @@ export default function ResourcesPage() {
         <Button onClick={openNew} data-testid="res-new-btn"><Plus size={18}/> Add Resource</Button>
       </div>
 
+      <PageState loading={status.loading} error={status.error} data={status.loaded ? rows : undefined} onRetry={load} emptyText="No resources yet." skeletonRows={3}>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {rows.map(r => {
           const gt = gts.find(g => g.id === r.game_type_id);
@@ -70,19 +75,20 @@ export default function ResourcesPage() {
                   </div>
                   <div className="flex flex-col gap-1">
                     <Button size="icon" variant="ghost" onClick={() => openEdit(r)}><PencilSimple size={18}/></Button>
-                    <Button size="icon" variant="ghost" onClick={() => remove(r.id)}><Trash size={18}/></Button>
+                    <DeleteButton what={r.name} size={18} lockKey={`resource:${r.id}`} onDelete={({ idempotencyKey }) => remove(r, idempotencyKey)} testId={`res-delete-${r.id}`} />
                   </div>
                 </div>
               </CardContent>
             </Card>
           );
         })}
-        {rows.length === 0 && <p className="text-muted-foreground col-span-full">No resources yet.</p>}
       </div>
+      </PageState>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(v) => { if (!saving) setOpen(v); }}>
         <DialogContent>
           <DialogHeader><DialogTitle className="font-display">{editing ? "Edit" : "New"} Resource</DialogTitle></DialogHeader>
+          <AsyncForm onSubmit={save} lockKey="resource-save" idempotent className="grid gap-4">
           <div className="space-y-4">
             <div>
               <Label>Name</Label>
@@ -104,9 +110,10 @@ export default function ResourcesPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={save} data-testid="res-save-btn">Save</Button>
+            <Button variant="outline" disabled={saving} onClick={() => setOpen(false)}>Cancel</Button>
+            <SubmitButton data-testid="res-save-btn">Save</SubmitButton>
           </DialogFooter>
+          </AsyncForm>
         </DialogContent>
       </Dialog>
     </div>

@@ -14,6 +14,29 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+/**
+ * Adds the Idempotency-Key header (one key per user action, from useAsyncAction) to an axios config.
+ * The server stores the key with the result: a repeated request returns the first result instead of acting twice.
+ */
+/**
+ * DELETE that treats 404 as "already deleted" (another tab or a repeated request got there first).
+ * Returns true if this call deleted it, false if it was already gone. Other errors are thrown.
+ */
+export async function deleteIfExists(url, config) {
+  try {
+    await api.delete(url, config);
+    return true;
+  } catch (err) {
+    if (err?.response?.status === 404) return false;
+    throw err;
+  }
+}
+
+export function withIdempotency(idempotencyKey, config = {}) {
+  if (!idempotencyKey) throw new Error("withIdempotency: missing key (use useAsyncAction with idempotent: true)");
+  return { ...config, headers: { ...(config.headers || {}), "Idempotency-Key": idempotencyKey } };
+}
+
 export function formatApiError(err) {
   // Check common backend keys: detail, message, or error
   const data = err?.response?.data;

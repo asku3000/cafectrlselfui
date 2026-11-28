@@ -1,4 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
+import { useLoadStatus } from "../lib/async/useAsyncData";
+import PageState from "../components/async/PageState";
 import { api } from "../lib/apiClient";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { fmtMoney } from "../lib/apiClient";
@@ -13,8 +15,7 @@ export default function DashboardPage() {
   const [active, setActive] = useState([]);
   const [resources, setResources] = useState([]);
 
-  const load = async () => {
-    try {
+  const fetchPage = async () => {
       if (user?.role === "CAFE_ADMIN" || user?.permissions?.includes("reports")) {
         const todayStr = new Date().toISOString().split('T')[0]; 
         
@@ -22,14 +23,11 @@ export default function DashboardPage() {
         const { data } = await api.get(`/reports/daily?date=${todayStr}`);
         setToday(data);
       }
-      const a = await api.get("/sessions/active").catch(() => ({ data: [] }));
+      const [a, r] = await Promise.all([api.get("/sessions/active"), api.get("/resources")]);
       setActive(a.data || []);
-      const r = await api.get("/resources").catch(() => ({ data: [] }));
       setResources(r.data || []);
-    } catch {}
   };
-
-  useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, []);
+  const { reload: load, ...status } = useLoadStatus(fetchPage, [], { pollMs: 30000 });
 
   const activeGames = active.reduce((acc, s) => acc + s.games.filter(g => g.status === "active").length, 0);
 
@@ -46,16 +44,19 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      <PageState loading={status.loading} error={status.error} data={status.loaded ? today : undefined} onRetry={load} isEmpty={false} skeletonRows={1}>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <KPI label="Today's Revenue" value={fmtMoney(today.total)} icon={Receipt} accent="text-primary" tid="kpi-revenue"/>
         <KPI label="Bills Today" value={today.count} icon={ChartBar} accent="text-emerald-500" tid="kpi-bills"/>
         <KPI label="Active Customers" value={active.length} icon={Users} accent="text-amber-500" tid="kpi-active"/>
         <KPI label="Active Games" value={activeGames} icon={Lightning} accent="text-blue-500" tid="kpi-active-games"/>
       </div>
+      </PageState>
 
       <Card>
         <CardHeader><CardTitle className="font-display">Resources</CardTitle></CardHeader>
         <CardContent>
+          <PageState loading={status.loading} error={null} data={status.loaded ? resources : undefined} isEmpty={false}>
           {resources.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               No resources yet. <Link to="/resources" className="text-primary underline">Add resources</Link> after creating game types and rate cards.
@@ -72,6 +73,7 @@ export default function DashboardPage() {
               ))}
             </div>
           )}
+          </PageState>
         </CardContent>
       </Card>
 

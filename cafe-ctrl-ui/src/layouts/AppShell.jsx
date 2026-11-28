@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import AsyncButton from "../components/async/AsyncButton";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
@@ -34,6 +35,7 @@ export default function AppShell() {
   const { user, cafe, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
+  const signOut = async () => { await logout(); navigate("/login"); };
   
   // State to track if the mobile menu is open
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -117,9 +119,9 @@ export default function AppShell() {
             {theme === "dark" ? <Sun size={18} weight="duotone" /> : <MoonStars size={18} weight="duotone" />}
             {theme === "dark" ? "Light Mode" : "Dark Mode"}
           </Button>
-          <Button variant="ghost" className="w-full justify-start gap-2 text-destructive hover:text-destructive" onClick={async () => { await logout(); navigate("/login"); }} data-testid="logout-btn">
+          <AsyncButton variant="ghost" className="w-full justify-start gap-2 text-destructive hover:text-destructive" lockKey="logout" onClick={signOut} data-testid="logout-btn">
             <SignOut size={18} weight="duotone" /> Logout
-          </Button>
+          </AsyncButton>
         </div>
       </aside>
 
@@ -146,9 +148,9 @@ export default function AppShell() {
             <Button size="icon" variant="ghost" onClick={toggle} data-testid="theme-toggle-mobile">
               {theme === "dark" ? <Sun size={18} /> : <MoonStars size={18} />}
             </Button>
-            <Button size="icon" variant="ghost" onClick={async () => { await logout(); navigate("/login"); }}>
+            <AsyncButton size="icon" variant="ghost" lockKey="logout" onClick={signOut}>
               <SignOut size={18} />
-            </Button>
+            </AsyncButton>
           </div>
         </header>
 

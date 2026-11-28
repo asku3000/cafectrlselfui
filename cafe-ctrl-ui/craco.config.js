@@ -32,6 +32,15 @@ let webpackConfig = {
       },
     },
   },
+  // `craco test`: same "@/..." alias as the build; axios is mapped to its CommonJS build for Jest
+  jest: {
+    configure: {
+      moduleNameMapper: {
+        '^@/(.*)$': '<rootDir>/src/$1',
+        '^axios$': 'axios/dist/node/axios.cjs',
+      },
+    },
+  },
   webpack: {
     alias: {
       '@': path.resolve(__dirname, 'src'),

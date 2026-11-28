@@ -1,4 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
+import PageState from "../components/async/PageState";
+import { useLockHeld } from "../lib/async/actionLocks";
+import AsyncButton from "../components/async/AsyncButton";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, formatApiError, todayISO } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
@@ -44,8 +47,8 @@ export default function AuditLogPage() {
 
   const [facets, setFacets] = useState({ actions: [], entity_types: [], actors: [] });
   const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [text, setText] = useState(filters.q);
   const [entityIdText, setEntityIdText] = useState(filters.entity_id);
   const [selected, setSelected] = useState(null);
@@ -68,8 +71,8 @@ export default function AuditLogPage() {
     let cancelled = false;
     setLoading(true);
     api.get("/audit-log", { params: { ...queryParams(), page, size: PAGE_SIZE } })
-      .then(({ data }) => { if (!cancelled) setData(data); })
-      .catch(e => { if (!cancelled) toast.error(formatApiError(e)); })
+      .then(({ data }) => { if (!cancelled) { setData(data); setLoadError(null); } })
+      .catch(e => { if (!cancelled) setLoadError(e); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -96,19 +99,14 @@ export default function AuditLogPage() {
   ];
 
   const exportCsv = async () => {
-    if (exporting) return;
-    try {
-      setExporting(true);
-      const res = await api.get("/audit-log/export", { params: queryParams(), responseType: "blob" });
-      const name = /filename="?([^";]+)"?/.exec(res.headers["content-disposition"] || "")?.[1] || "audit-log.csv";
-      const url = URL.createObjectURL(res.data);
-      const a = document.createElement("a");
-      a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
-      if (res.headers["x-export-truncated"] === "true") toast.warning("Export was capped at 50,000 rows. Narrow the filters to get the rest.");
-      else toast.success("Exported");
-    } catch (e) { toast.error(formatApiError(e)); }
-    finally { setExporting(false); }
+    const res = await api.get("/audit-log/export", { params: queryParams(), responseType: "blob" });
+    const name = /filename="?([^";]+)"?/.exec(res.headers["content-disposition"] || "")?.[1] || "audit-log.csv";
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement("a");
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    if (res.headers["x-export-truncated"] === "true") toast.warning("Export was capped at 50,000 rows. Narrow the filters to get the rest.");
+    else toast.success("Exported");
   };
 
   const actionOptions = facets.actions.map(a => ({ value: a, label: pretty(a) }));
@@ -122,9 +120,9 @@ export default function AuditLogPage() {
           <h1 className="text-4xl font-display font-extrabold">Audit Log</h1>
           <p className="text-muted-foreground mt-2">Every change made in the app: who, what, when (IST) and from where.</p>
         </div>
-        <Button variant="outline" onClick={exportCsv} disabled={exporting} data-testid="audit-export-btn">
-          <DownloadSimple size={16}/> {exporting ? "Exporting…" : "Export CSV"}
-        </Button>
+        <AsyncButton variant="outline" onClick={exportCsv} lockKey="audit-export" loadingText="Exporting…" data-testid="audit-export-btn">
+          <DownloadSimple size={16}/> Export CSV
+        </AsyncButton>
       </div>
 
       <Card>
@@ -206,6 +204,7 @@ export default function AuditLogPage() {
         </CardContent>
       </Card>
 
+      <PageState loading={loading} error={loadError} data={data ?? undefined} isEmpty={false} onRetry={() => setReloadKey(k => k + 1)} skeletonRows={8}>
       <Card>
         <CardContent className="p-0 overflow-x-auto">
           <table className="w-full text-sm">
@@ -252,6 +251,7 @@ export default function AuditLogPage() {
           )}
         </CardContent>
       </Card>
+      </PageState>
 
       {data && data.total_pages > 1 && (
         <div className="flex items-center justify-between">
@@ -344,11 +344,13 @@ function AuditDetailDialog({ id, onClose }) {
   );
 }
 
+const PURGE_LOCK = "audit-purge";
+
 /** "Kept for N days" + dry run / purge now. A cafe admin's purge only covers their own cafe. */
 function RetentionPanel({ onPurged }) {
   const [info, setInfo] = useState(null);
   const [preview, setPreview] = useState(null); // dry-run result shown in the confirm dialog
-  const [busy, setBusy] = useState(false);
+  const busy = useLockHeld(PURGE_LOCK);
 
   const loadInfo = () => api.get("/audit-log/purge").then(({ data }) => setInfo(data)).catch(() => {});
   useEffect(() => { loadInfo(); }, []);
@@ -358,29 +360,23 @@ function RetentionPanel({ onPurged }) {
     : "—";
 
   const dryRun = async (openConfirm) => {
-    if (busy) return;
-    try {
-      setBusy(true);
-      const { data } = await api.post("/audit-log/purge", null, { params: { dry_run: true } });
-      if (openConfirm) setPreview(data);
-      else toast.message(`Dry run: ${data.would_delete} entr${data.would_delete === 1 ? "y" : "ies"} older than ${istDateTime(data.cutoff_ist)} would be deleted. Nothing was deleted.`);
-      onPurged(); // the dry run itself is logged
-    } catch (e) { toast.error(formatApiError(e)); }
-    finally { setBusy(false); }
+    const { data } = await api.post("/audit-log/purge", null, { params: { dry_run: true } });
+    if (openConfirm) setPreview(data);
+    else toast.message(`Dry run: ${data.would_delete} entr${data.would_delete === 1 ? "y" : "ies"} older than ${istDateTime(data.cutoff_ist)} would be deleted. Nothing was deleted.`);
+    onPurged(); // the dry run itself is logged
   };
 
   const purgeNow = async () => {
-    if (busy) return;
     try {
-      setBusy(true);
       const { data } = await api.post("/audit-log/purge", null, { params: { dry_run: false } });
       toast.success(`Deleted ${data.deleted} old entr${data.deleted === 1 ? "y" : "ies"}`);
       setPreview(null);
       loadInfo();
       onPurged();
     } catch (e) {
-      toast.error(e?.response?.status === 409 ? "A purge is already running. Try again in a minute." : formatApiError(e));
-    } finally { setBusy(false); }
+      if (e?.response?.status !== 409) throw e;
+      toast.error("A purge is already running. Try again in a minute."); // dialog stays open; nothing was deleted twice
+    }
   };
 
   if (!info) return null;
@@ -396,12 +392,12 @@ function RetentionPanel({ onPurged }) {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => dryRun(false)} data-testid="audit-dry-run">Dry run</Button>
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => dryRun(true)} data-testid="audit-purge-btn"><Broom size={14}/> Purge old entries</Button>
+          <AsyncButton variant="outline" size="sm" lockKey={PURGE_LOCK} onClick={() => dryRun(false)} data-testid="audit-dry-run">Dry run</AsyncButton>
+          <AsyncButton variant="outline" size="sm" lockKey={PURGE_LOCK} onClick={() => dryRun(true)} data-testid="audit-purge-btn"><Broom size={14}/> Purge old entries</AsyncButton>
         </div>
       </CardContent>
 
-      <Dialog open={!!preview} onOpenChange={v => !v && setPreview(null)}>
+      <Dialog open={!!preview} onOpenChange={v => { if (!v && !busy) setPreview(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle className="font-display">Delete old audit entries?</DialogTitle></DialogHeader>
           {preview && (
@@ -412,10 +408,11 @@ function RetentionPanel({ onPurged }) {
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPreview(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={purgeNow} disabled={busy || !preview || preview.would_delete === 0} data-testid="audit-purge-confirm">
-              {busy ? "Deleting…" : preview?.would_delete === 0 ? "Nothing to delete" : "Delete"}
-            </Button>
+            <Button variant="outline" disabled={busy} onClick={() => setPreview(null)}>Cancel</Button>
+            <AsyncButton variant="destructive" onClick={purgeNow} lockKey={PURGE_LOCK} disabled={!preview || preview.would_delete === 0}
+                         loadingText="Deleting…" data-testid="audit-purge-confirm">
+              {preview?.would_delete === 0 ? "Nothing to delete" : "Delete"}
+            </AsyncButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>

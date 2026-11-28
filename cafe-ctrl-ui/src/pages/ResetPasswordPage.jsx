@@ -1,10 +1,10 @@
 import React, { useState } from "react";
+import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
 import { useSearchParams, useNavigate, Link } from "react-router-dom";
-import { api, formatApiError } from "../lib/apiClient";
+import { api } from "../lib/apiClient";
 import { Card, CardContent } from "../components/ui/card";
 import { Label } from "../components/ui/label";
 import { Input } from "../components/ui/input";
-import { Button } from "../components/ui/button";
 import { toast } from "sonner";
 import { Lightning, ShieldCheck } from "@phosphor-icons/react";
 
@@ -15,10 +15,8 @@ export default function ResetPasswordPage() {
   
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [busy, setBusy] = useState(false);
 
-  const handleReset = async (e) => {
-    e.preventDefault();
+  const handleReset = async () => {
     if (newPassword !== confirmPassword) {
       return toast.error("Passwords do not match!");
     }
@@ -26,16 +24,9 @@ export default function ResetPasswordPage() {
       return toast.error("Missing password reset verification token.");
     }
 
-    setBusy(true);
-    try {
-      const { data } = await api.post("/auth/reset-password", { token, newPassword });
-      toast.success(data.message || "Password updated successfully! Redirecting...");
-      setTimeout(() => navigate("/login"), 2000);
-    } catch (err) {
-      toast.error(formatApiError(err) || "Failed to update security credentials.");
-    } finally {
-      setBusy(false);
-    }
+    const { data } = await api.post("/auth/reset-password", { token, newPassword });
+    toast.success(data.message || "Password updated successfully! Redirecting...");
+    setTimeout(() => navigate("/login"), 2000);
   };
 
   return (
@@ -53,7 +44,7 @@ export default function ResetPasswordPage() {
           </div>
           <h2 className="text-3xl font-display font-bold mb-6">Create New Password</h2>
           
-          <form onSubmit={handleReset} className="space-y-4">
+          <AsyncForm onSubmit={handleReset} className="space-y-4">
             <div>
               <Label htmlFor="new-pass">New Password</Label>
               <Input 
@@ -74,10 +65,8 @@ export default function ResetPasswordPage() {
                 required 
               />
             </div>
-            <Button type="submit" className="w-full" disabled={busy}>
-              {busy ? "Updating account entries..." : "Reset Security Password"}
-            </Button>
-          </form>
+            <SubmitButton className="w-full" loadingText="Updating…">Reset Security Password</SubmitButton>
+          </AsyncForm>
           
           <div className="mt-6 text-center text-xs">
             <Link to="/login" className="text-muted-foreground hover:text-primary underline">

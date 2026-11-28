@@ -1,5 +1,10 @@
-import React, { useEffect, useState } from "react";
-import { api, formatApiError, fmtPaise, parseHundredths, hundredthsToInput } from "../lib/apiClient";
+import React, { useState } from "react";
+import { useLoadStatus } from "../lib/async/useAsyncData";
+import PageState from "../components/async/PageState";
+import { useAsyncAction } from "../lib/async/useAsyncAction";
+import { useLockHeld } from "../lib/async/actionLocks";
+import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
+import { api, fmtPaise, parseHundredths, hundredthsToInput, withIdempotency } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -30,23 +35,21 @@ export default function MembershipPlansPage() {
   const [settings, setSettings] = useState(null);
   const [settingsForm, setSettingsForm] = useState(null);
   const [open, setOpen] = useState(false);
+  const saving = useLockHeld("plan-save");
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
-  const [saving, setSaving] = useState(false);
 
-  const load = async () => {
-    try {
-      const [p, s] = await Promise.all([api.get("/membership/plans"), api.get("/membership/settings")]);
-      setPlans(p.data);
-      setSettings(s.data);
-      setSettingsForm({
-        deduction_order: s.data.deduction_order,
-        low_balance: hundredthsToInput(s.data.low_balance_threshold_paise),
-        card_number_prefix: s.data.card_number_prefix,
-      });
-    } catch (e) { toast.error(formatApiError(e)); }
+  const fetchPage = async () => {
+    const [p, s] = await Promise.all([api.get("/membership/plans"), api.get("/membership/settings")]);
+    setPlans(p.data);
+    setSettings(s.data);
+    setSettingsForm({
+      deduction_order: s.data.deduction_order,
+      low_balance: hundredthsToInput(s.data.low_balance_threshold_paise),
+      card_number_prefix: s.data.card_number_prefix,
+    });
   };
-  useEffect(() => { load(); }, []);
+  const { reload: load, ...status } = useLoadStatus(fetchPage);
 
   const openNew = () => {
     setEditing(null);
@@ -74,8 +77,7 @@ export default function MembershipPlansPage() {
   const bonusValue = parseHundredths(form.bonus);
   const bonusPreview = previewBonus(loadPaise, form.bonus_type, bonusValue);
 
-  const save = async () => {
-    if (saving) return;
+  const save = async ({ idempotencyKey }) => {
     if (!form.name.trim()) return toast.error("Plan name is required");
     if (loadPaise == null || loadPaise <= 0) return toast.error("Enter a valid load amount (max 2 decimals)");
     if (bonusValue == null || bonusValue < 0) return toast.error("Enter a valid bonus (max 2 decimals)");
@@ -94,37 +96,29 @@ export default function MembershipPlansPage() {
       description: form.description,
       is_active: form.is_active,
     };
-    try {
-      setSaving(true);
-      if (editing) await api.put(`/membership/plans/${editing.id}`, payload);
-      else await api.post("/membership/plans", payload);
-      setOpen(false);
-      load();
-      toast.success(editing ? "Plan updated — cards already sold keep their original terms" : "Plan created");
-    } catch (e) { toast.error(formatApiError(e)); }
-    finally { setSaving(false); }
+    if (editing) await api.put(`/membership/plans/${editing.id}`, payload, withIdempotency(idempotencyKey));
+    else await api.post("/membership/plans", payload, withIdempotency(idempotencyKey));
+    setOpen(false);
+    load();
+    toast.success(editing ? "Plan updated — cards already sold keep their original terms" : "Plan created");
   };
 
-  const toggleActive = async (p) => {
-    try {
-      await api.patch(`/membership/plans/${p.id}/active`, { active: !p.is_active });
-      load();
-      toast.success(p.is_active ? `${p.name} deactivated — existing cards keep working` : `${p.name} is on sale again`);
-    } catch (e) { toast.error(formatApiError(e)); }
+  const toggleActive = async (p, idempotencyKey) => {
+    await api.patch(`/membership/plans/${p.id}/active`, { active: !p.is_active }, withIdempotency(idempotencyKey));
+    await load();
+    toast.success(p.is_active ? `${p.name} deactivated — existing cards keep working` : `${p.name} is on sale again`);
   };
 
-  const saveSettings = async () => {
+  const saveSettings = async ({ idempotencyKey }) => {
     const threshold = parseHundredths(settingsForm.low_balance);
     if (threshold == null || threshold < 0) return toast.error("Enter a valid low-balance amount");
-    try {
-      await api.put("/membership/settings", {
-        deduction_order: settingsForm.deduction_order,
-        low_balance_threshold_paise: threshold,
-        card_number_prefix: settingsForm.card_number_prefix,
-      });
-      load();
-      toast.success("Membership settings saved");
-    } catch (e) { toast.error(formatApiError(e)); }
+    await api.put("/membership/settings", {
+      deduction_order: settingsForm.deduction_order,
+      low_balance_threshold_paise: threshold,
+      card_number_prefix: settingsForm.card_number_prefix,
+    }, withIdempotency(idempotencyKey));
+    load();
+    toast.success("Membership settings saved");
   };
 
   return (
@@ -138,6 +132,7 @@ export default function MembershipPlansPage() {
         <Button onClick={openNew} data-testid="plan-new-btn"><Plus size={18}/> New Plan</Button>
       </div>
 
+      <PageState loading={status.loading} error={status.error} data={status.loaded ? plans : undefined} onRetry={load} emptyText={'No plans yet. Create your first one, e.g. "Silver — pay ₹1000, get 10% extra, valid 90 days".'} skeletonRows={3} emptyIcon={IdentificationCard}>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {plans.map(p => (
           <Card key={p.id} className={`hover-lift overflow-hidden ${p.is_active ? "" : "opacity-60"}`} data-testid={`plan-${p.id}`}>
@@ -170,24 +165,19 @@ export default function MembershipPlansPage() {
               {p.description && <p className="text-sm whitespace-pre-line">{p.description}</p>}
               <div className="flex items-center justify-between pt-2 border-t border-border">
                 <span className="text-sm">On sale</span>
-                <Switch checked={p.is_active} onCheckedChange={() => toggleActive(p)} data-testid={`plan-active-${p.id}`} />
+                <PlanActiveSwitch plan={p} onToggle={toggleActive} />
               </div>
             </CardContent>
           </Card>
         ))}
-        {plans.length === 0 && (
-          <Card className="col-span-full">
-            <CardContent className="pt-6 flex items-center gap-3 text-muted-foreground">
-              <IdentificationCard size={28} weight="duotone"/> No plans yet. Create your first one, e.g. "Silver — pay ₹1000, get 10% extra, valid 90 days".
-            </CardContent>
-          </Card>
-        )}
       </div>
+      </PageState>
 
       {settingsForm && (
         <Card>
           <CardHeader><CardTitle className="font-display">Membership settings</CardTitle></CardHeader>
-          <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <CardContent>
+          <AsyncForm onSubmit={saveSettings} lockKey="membership-settings" idempotent className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <Label>Card payments use first</Label>
               <Select value={settingsForm.deduction_order} onValueChange={v => setSettingsForm(f => ({ ...f, deduction_order: v }))}>
@@ -212,15 +202,17 @@ export default function MembershipPlansPage() {
               <span className="text-xs text-muted-foreground">
                 {settings?.updated_by_name ? `Last changed by ${settings.updated_by_name}` : "Using default settings"}
               </span>
-              <Button onClick={saveSettings} data-testid="settings-save-btn">Save settings</Button>
+              <SubmitButton data-testid="settings-save-btn">Save settings</SubmitButton>
             </div>
+          </AsyncForm>
           </CardContent>
         </Card>
       )}
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(v) => { if (!saving) setOpen(v); }}>
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle className="font-display">{editing ? `Edit ${editing.name}` : "New membership plan"}</DialogTitle></DialogHeader>
+          <AsyncForm onSubmit={save} lockKey="plan-save" idempotent className="grid gap-4">
           <div className="space-y-4 max-h-[65vh] overflow-y-auto pr-1">
             <div><Label>Name</Label><Input value={form.name} maxLength={60} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Silver" data-testid="plan-name"/></div>
             <div className="grid grid-cols-2 gap-3">
@@ -264,9 +256,10 @@ export default function MembershipPlansPage() {
             {editing && <p className="text-xs text-muted-foreground">Changes apply only to cards sold from now on.</p>}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={save} disabled={saving} data-testid="plan-save-btn">{saving ? "Saving…" : "Save"}</Button>
+            <Button variant="outline" disabled={saving} onClick={() => setOpen(false)}>Cancel</Button>
+            <SubmitButton data-testid="plan-save-btn">Save</SubmitButton>
           </DialogFooter>
+          </AsyncForm>
         </DialogContent>
       </Dialog>
     </div>
@@ -279,5 +272,14 @@ function Stat({ label, value, strong }) {
       <div className="text-[0.6rem] uppercase tracking-widest text-muted-foreground font-bold">{label}</div>
       <div className={`font-mono text-sm ${strong ? "font-bold" : ""}`}>{value}</div>
     </div>
+  );
+}
+
+/** On/off switch for a plan: one change at a time per plan, busy while saving (no double toggles). */
+function PlanActiveSwitch({ plan, onToggle }) {
+  const { run, busy } = useAsyncAction(({ idempotencyKey }) => onToggle(plan, idempotencyKey), { lockKey: `plan:${plan.id}`, idempotent: true });
+  return (
+    <Switch checked={plan.is_active} disabled={busy} aria-busy={busy || undefined}
+            onCheckedChange={() => run()} data-testid={`plan-active-${plan.id}`} />
   );
 }

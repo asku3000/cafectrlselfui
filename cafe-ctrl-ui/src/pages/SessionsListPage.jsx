@@ -1,6 +1,9 @@
 import React, { useEffect, useState, useRef } from "react";
+import { useLoadStatus } from "../lib/async/useAsyncData";
+import PageState from "../components/async/PageState";
+import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
 import { Link } from "react-router-dom";
-import { api, formatApiError, fmtMoney, fmtDateTime, fmtDuration, minutesBetween, toLocalInput, fromLocalInput } from "../lib/apiClient";
+import { api, fmtMoney, fmtDateTime, fmtDuration, minutesBetween, toLocalInput, fromLocalInput, withIdempotency } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -11,7 +14,7 @@ import { Lightning, Plus, ArrowRight, BellSimple, BellSimpleSlash } from "@phosp
 import { toast } from "sonner";
 import { playChime, pushNotify, ensureNotificationPermission, ensureMutedFlag, setMuted } from "../lib/notifications";
 import DateTimePicker from "../components/DateTimePicker";
-import { CircleNotchIcon } from "@phosphor-icons/react";
+import { useLockHeld } from "../lib/async/actionLocks";
 import MembershipCardPicker from "../components/membership/MembershipCardPicker";
 
 export default function SessionsListPage() {
@@ -40,13 +43,12 @@ export default function SessionsListPage() {
 
   const toggleMute = () => { const v = !muted; setMutedState(v); setMuted(v); toast(v ? "Reminders muted" : "Reminders on"); };
 
-  const load = async () => {
-    try {
-      const [r, a, rc] = await Promise.all([api.get("/resources"), api.get("/sessions/active"), api.get("/rate-cards")]);
-      setResources(r.data); setActive(a.data); setRateCards(rc.data);
-    } catch (e) { toast.error(formatApiError(e)); }
+  const fetchPage = async () => {
+    const [r, a, rc] = await Promise.all([api.get("/resources"), api.get("/sessions/active"), api.get("/rate-cards")]);
+    setResources(r.data); setActive(a.data); setRateCards(rc.data);
   };
-  useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, []);
+  // a failed background refresh shows "Couldn't refresh" above the (older) list instead of a toast every 15 s
+  const { reload: load, ...status } = useLoadStatus(fetchPage, [], { pollMs: 15000 });
 
   // soft notification at billing intervals
   useEffect(() => {
@@ -84,37 +86,31 @@ export default function SessionsListPage() {
     setOpenNew(true);
   };
 
-  const [isAddingGame, setIsAddingGame] = useState(false);
+  const START_LOCK = "session-start";
+  const starting = useLockHeld(START_LOCK);
 
-  const start = async () => {
-  try {
-    if (isAddingGame) return; // Prevent multiple submissions
+  // One key per click on Start: a double click, a retry or a second device can't start the session twice
+  const start = async ({ idempotencyKey }) => {
     if (!form.customer_name || !form.resource_id) return toast.error("Customer name & resource required");
-    setIsAddingGame(true)
-    // Create the cleaned payload
     const payload = {
       customer_name: form.customer_name,
       customer_phone: form.customer_phone,
       resource_id: form.resource_id,
       player_count: Number(form.player_count) || 1,
-      // Pass the state directly to the cleaner
       start_time: fromLocalInput(form.start_time),
       // Optional: omitted entirely for non-members so the request is exactly as before
       ...(form.membership_card ? { membership_card_id: form.membership_card.id } : {}),
     };
-
-    console.log("Sending payload:", payload); // Debugging: Check console in production!
-
-    await api.post("/sessions", payload);
-    setOpenNew(false); 
-    load(); 
+    try {
+      await api.post("/sessions", payload, withIdempotency(idempotencyKey));
+    } catch (e) {
+      if (e?.response?.status === 409) load(); // the station was taken meanwhile: refresh the grid
+      throw e;
+    }
+    setOpenNew(false);
+    load();
     toast.success("Session started");
-  } catch (e) { 
-    toast.error(formatApiError(e)); 
-  } finally {
-    setIsAddingGame(false);
-  }
-};
+  };
 
   return (
     <div className="space-y-6" data-testid="sessions-root">
@@ -133,6 +129,7 @@ export default function SessionsListPage() {
       <Card>
         <CardHeader><CardTitle className="font-display">Resources</CardTitle></CardHeader>
         <CardContent>
+          <PageState loading={status.loading} error={status.error} data={status.loaded ? resources : undefined} onRetry={load} isEmpty={false} skeletonRows={2}>
           {resources.length === 0 ? (
             <p className="text-sm text-muted-foreground">No resources configured. Ask the admin to add resources.</p>
           ) : (
@@ -163,6 +160,7 @@ export default function SessionsListPage() {
               ))}
             </div>
           )}
+          </PageState>
         </CardContent>
       </Card>
 
@@ -171,6 +169,7 @@ export default function SessionsListPage() {
           <CardTitle className="font-display">Active customers</CardTitle>
         </CardHeader>
         <CardContent>
+          <PageState loading={status.loading} error={null} data={status.loaded ? active : undefined} isEmpty={false} skeletonRows={3}>
           {active.length === 0 ? (
             <p className="text-sm text-muted-foreground">No active sessions.</p>
           ) : (
@@ -199,12 +198,14 @@ export default function SessionsListPage() {
               })}
             </div>
           )}
+          </PageState>
         </CardContent>
       </Card>
 
-      <Dialog open={openNew} onOpenChange={setOpenNew}>
+      <Dialog open={openNew} onOpenChange={v => !starting && setOpenNew(v)}>
         <DialogContent>
           <DialogHeader><DialogTitle className="font-display">Start new session</DialogTitle></DialogHeader>
+          <AsyncForm onSubmit={start} lockKey={START_LOCK} idempotent className="grid gap-4">
           <div className="space-y-4">
             <div>
               <Label>Membership card <span className="text-muted-foreground font-normal">(optional)</span></Label>
@@ -245,17 +246,12 @@ export default function SessionsListPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpenNew(false)}>Cancel</Button>
-            <Button onClick={start} disabled={isAddingGame} data-testid="new-cust-start-btn">
-              {isAddingGame ? (
-                <>
-                <CircleNotchIcon className="animate-spin mr-2" /> : <Lightning size={16} weight="fill" />
-                Starting...
-                </>
-              ):("Start")
-              }
-            </Button>
+            <Button variant="outline" disabled={starting} onClick={() => setOpenNew(false)}>Cancel</Button>
+            <SubmitButton data-testid="new-cust-start-btn">
+              <Lightning size={16} weight="fill" /> Start
+            </SubmitButton>
           </DialogFooter>
+          </AsyncForm>
         </DialogContent>
       </Dialog>
     </div>

@@ -1,5 +1,9 @@
-import React, { useEffect, useState } from "react";
-import { api, formatApiError, fmtMoney, fmtDateTime, fmtDuration, minutesBetween} from "../lib/apiClient";
+import React, { useState } from "react";
+import { useLoadStatus } from "../lib/async/useAsyncData";
+import PageState from "../components/async/PageState";
+import { api, fmtMoney, fmtDateTime, fmtDuration, minutesBetween, withIdempotency } from "../lib/apiClient";
+import AsyncButton from "../components/async/AsyncButton";
+import { useLockHeld } from "../lib/async/actionLocks";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -14,7 +18,6 @@ export default function CustomersPage() {
   const [activeTab, setActiveTab] = useState("directory"); 
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
-  const [loading, setLoading] = useState(true);
 
   // --- NEW: Pagination State ---
   const [currentPage, setCurrentPage] = useState(0);
@@ -35,12 +38,11 @@ export default function CustomersPage() {
   const [settleSplits, setSettleSplits] = useState([{ mode: "upi", amount: 0 }]);
   const [settleNotes, setSettleNotes] = useState("");
 
-  const loadData = async () => {
-    setLoading(true);
-    try {
+  const fetchPage = async ({ isStale }) => {
       if (activeTab === "directory") {
         // UPDATED: Pass page and size parameters
         const { data } = await api.get(`/customers?page=${currentPage}&size=10`);
+        if (isStale()) return;
         
         // Handles both the new paginated map response or legacy flat list
         if (data && data.data) {
@@ -54,13 +56,9 @@ export default function CustomersPage() {
         }
       } else {
         const { data } = await api.get("/customers/pending");
+        if (isStale()) return;
         setPendingList(data);
       }
-    } catch (e) {
-      toast.error(formatApiError(e));
-    } finally {
-      setLoading(false);
-    }
   };
 
   const openSettleModal = (debtObj) => {
@@ -70,51 +68,36 @@ export default function CustomersPage() {
   };
 
   // UPDATED: Added currentPage to the dependency array so it re-fetches when page changes
-  useEffect(() => { loadData(); }, [activeTab, currentPage]);
+  const { reload: loadData, ...status } = useLoadStatus(fetchPage, [activeTab, currentPage]);
 
   const viewCustomerProfile = async (cust) => {
-    try {
-      const { data } = await api.get(`/customers/history?name=${encodeURIComponent(cust.name)}&phone=${cust.phone || ""}`);
-      setCustomerHistory(data);
-      setSelectedCustomer(cust);
-    } catch (e) {
-      toast.error(formatApiError(e));
-    }
+    const { data } = await api.get(`/customers/history?name=${encodeURIComponent(cust.name)}&phone=${cust.phone || ""}`);
+    setCustomerHistory(data);
+    setSelectedCustomer(cust);
   };
 
   const viewPendingBill = async (sessionId) => {
-    try {
-      const { data } = await api.get(`/sessions/${sessionId}`);
-      setActiveReceipt(data);
-    } catch (e) {
-      toast.error(formatApiError(e) || "Could not load the original bill.");
-    }
+    const { data } = await api.get(`/sessions/${sessionId}`);
+    setActiveReceipt(data);
   };
 
-  const executeSettlement = async () => {
-    try {
-      const filteredSplits = settleSplits.filter(p => Number(p.amount) > 0);
-      
-      // Bodyguard 1: Did they enter numbers?
-      if (filteredSplits.length === 0) return toast.error("Enter at least one payment value");
+  const settleLock = settleTarget ? `debt:${settleTarget.id}` : null;
+  const settling = useLockHeld(settleLock);
 
-      // Bodyguard 2: Does the math equal the exact debt?
-      const totalAssigned = filteredSplits.reduce((sum, p) => sum + Number(p.amount), 0);
-      if (Math.abs(totalAssigned - settleTarget.amount) > 0.01) {
-        return toast.error(`Split math mismatch! You must assign exactly ${fmtMoney(settleTarget.amount)}`);
-      }
-
-      await api.post(`/pending-payments/${settleTarget.id}/clear`, { 
-        payments: filteredSplits,
-        notes: settleNotes 
-      });
-
-      toast.success("Debt settlement accounted and pushed to daily collection!");
-      setSettleTarget(null);
-      loadData();
-    } catch (e) {
-      toast.error(formatApiError(e));
+  const executeSettlement = async ({ idempotencyKey }) => {
+    const filteredSplits = settleSplits.filter(p => Number(p.amount) > 0);
+    // Bodyguard 1: Did they enter numbers?
+    if (filteredSplits.length === 0) return toast.error("Enter at least one payment value");
+    // Bodyguard 2: Does the math equal the exact debt?
+    const totalAssigned = filteredSplits.reduce((sum, p) => sum + Number(p.amount), 0);
+    if (Math.abs(totalAssigned - settleTarget.amount) > 0.01) {
+      return toast.error(`Split math mismatch! You must assign exactly ${fmtMoney(settleTarget.amount)}`);
     }
+    await api.post(`/pending-payments/${settleTarget.id}/clear`, { payments: filteredSplits, notes: settleNotes },
+      withIdempotency(idempotencyKey));
+    toast.success("Debt settlement accounted and pushed to daily collection!");
+    setSettleTarget(null);
+    loadData();
   };
 
   const filteredDirectory = customers.filter(c => 
@@ -145,9 +128,8 @@ export default function CustomersPage() {
         </button>
       </div>
 
-      {loading ? (
-        <div className="text-muted-foreground text-sm">Fetching structural records...</div>
-      ) : activeTab === "directory" ? (
+      <PageState loading={status.loading} error={status.error} data={status.loaded ? activeTab : undefined} isEmpty={false} onRetry={loadData} skeletonRows={6}>
+      {activeTab === "directory" ? (
         /* TAB 1: CUSTOMER DIRECTORY SYSTEM LAYOUT */
         <div className="space-y-4">
           <Input 
@@ -177,9 +159,9 @@ export default function CustomersPage() {
                         <td className="py-3 px-4 font-mono text-muted-foreground">{c.phone || "—"}</td>
                         <td className="py-3 px-4 text-center font-bold">{c.totalVisits}</td>
                         <td className="py-3 px-4 text-right">
-                          <Button size="sm" variant="outline" onClick={() => viewCustomerProfile(c)}>
+                          <AsyncButton size="sm" variant="outline" lockKey="customer-view" onClick={() => viewCustomerProfile(c)}>
                             <Notebook size={14} /> View History
-                          </Button>
+                          </AsyncButton>
                         </td>
                       </tr>
                     ))}
@@ -244,14 +226,14 @@ export default function CustomersPage() {
                       <td className="py-3 px-4 text-right font-mono font-extrabold text-amber-500">{fmtMoney(p.amount)}</td>
                       
                       <td className="py-3 px-4 text-center flex items-center justify-center gap-2">
-                        <Button 
+                        <AsyncButton 
                           size="icon" 
                           variant="ghost" 
                           title="View Original Bill"
-                          onClick={() => viewPendingBill(p.sessionId)}
+                          lockKey="customer-view" onClick={() => viewPendingBill(p.sessionId)}
                         >
                           <Receipt size={18} className="text-muted-foreground hover:text-primary" />
-                        </Button>
+                        </AsyncButton>
                         <Button 
                           size="sm" 
                           className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
@@ -268,6 +250,7 @@ export default function CustomersPage() {
           </CardContent>
         </Card>
       )}
+      </PageState>
 
       {/* MODAL 1: CUSTOMER TIMELINE HISTORY DRILLDOWN INSPECTOR */}
       <Dialog open={!!selectedCustomer} onOpenChange={v => !v && setSelectedCustomer(null)}>
@@ -385,7 +368,7 @@ export default function CustomersPage() {
       </Dialog>
 
       {/* MODAL 3: MULTI-SPLIT DEBT SETTLEMENT PORTAL */}
-      <Dialog open={!!settleTarget} onOpenChange={v => !v && setSettleTarget(null)}>
+      <Dialog open={!!settleTarget} onOpenChange={v => !v && !settling && setSettleTarget(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="font-display text-xl font-bold">
@@ -470,14 +453,17 @@ export default function CustomersPage() {
           )}
 
           <DialogFooter className="mt-2">
-            <Button variant="outline" onClick={() => setSettleTarget(null)}>Cancel</Button>
-            <Button 
-              className="bg-emerald-600 hover:bg-emerald-700 text-white" 
+            <Button variant="outline" disabled={settling} onClick={() => setSettleTarget(null)}>Cancel</Button>
+            <AsyncButton
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
               onClick={executeSettlement}
+              lockKey={settleLock}
+              idempotent
               disabled={!settleTarget || Math.abs(settleSplits.reduce((a, p) => a + Number(p.amount || 0), 0) - settleTarget.amount) > 0.01}
+              data-testid="settle-submit"
             >
               Post Settlement
-            </Button>
+            </AsyncButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>

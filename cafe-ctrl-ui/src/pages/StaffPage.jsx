@@ -1,5 +1,10 @@
-import React, { useEffect, useState } from "react";
-import { api, formatApiError } from "../lib/apiClient";
+import React, { useState } from "react";
+import { useLoadStatus } from "../lib/async/useAsyncData";
+import PageState from "../components/async/PageState";
+import { useLockHeld } from "../lib/async/actionLocks";
+import DeleteButton from "../components/async/DeleteButton";
+import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
+import { api, deleteIfExists, withIdempotency } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -7,7 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Checkbox } from "../components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { Switch } from "../components/ui/switch";
-import { Plus, Trash, PencilSimple } from "@phosphor-icons/react";
+import { Plus, PencilSimple } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
 const PERMS = [
@@ -21,31 +26,34 @@ const PERMS = [
 export default function StaffPage() {
   const [staff, setStaff] = useState([]);
   const [open, setOpen] = useState(false);
+  const saving = useLockHeld("staff-save");
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ email: "", password: "", name: "", permissions: ["sessions", "billing"] });
 
-  const load = async () => { try { const { data } = await api.get("/staff"); setStaff(data); } catch (e) { toast.error(formatApiError(e)); } };
-  useEffect(() => { load(); }, []);
+  const fetchPage = async () => { const { data } = await api.get("/staff"); setStaff(data); };
+  const { reload: load, ...status } = useLoadStatus(fetchPage);
 
   const openNew = () => { setEditing(null); setForm({ email: "", password: "", name: "", permissions: ["sessions","billing"] }); setOpen(true); };
   const openEdit = (u) => { setEditing(u); setForm({ name: u.name, permissions: u.permissions || [], email: u.email, password: "", is_active: u.is_active }); setOpen(true); };
 
   const togglePerm = (k) => setForm(f => ({ ...f, permissions: f.permissions.includes(k) ? f.permissions.filter(p => p !== k) : [...f.permissions, k] }));
 
-  const save = async () => {
-    try {
-      if (editing) {
-        const payload = { name: form.name, permissions: form.permissions, is_active: form.is_active };
-        if (form.password) payload.new_password = form.password;
-        await api.put(`/staff/${editing.id}`, payload);
-      } else {
-        if (!form.email || !form.password) return toast.error("Email & password required");
-        await api.post("/staff", { name: form.name, email: form.email, password: form.password, permissions: form.permissions });
-      }
-      setOpen(false); load(); toast.success("Saved");
-    } catch (e) { toast.error(formatApiError(e)); }
+  const save = async ({ idempotencyKey }) => {
+    if (editing) {
+      const payload = { name: form.name, permissions: form.permissions, is_active: form.is_active };
+      if (form.password) payload.password = form.password;
+      await api.put(`/staff/${editing.id}`, payload, withIdempotency(idempotencyKey));
+    } else {
+      if (!form.email || !form.password) return toast.error("Email & password required");
+      await api.post("/staff", { name: form.name, email: form.email, password: form.password, permissions: form.permissions }, withIdempotency(idempotencyKey));
+    }
+    setOpen(false); load(); toast.success("Saved");
   };
-  const remove = async (id) => { try { await api.delete(`/staff/${id}`); load(); } catch (e) { toast.error(formatApiError(e)); } };
+  const remove = async (u, idempotencyKey) => {
+    const deleted = await deleteIfExists(`/staff/${u.id}`, withIdempotency(idempotencyKey));
+    load();
+    toast.success(deleted ? `${u.name} removed` : `${u.name} was already removed`);
+  };
 
   return (
     <div className="space-y-6" data-testid="staff-root">
@@ -58,6 +66,7 @@ export default function StaffPage() {
         <Button onClick={openNew} data-testid="staff-new-btn"><Plus size={18}/> Add Operator</Button>
       </div>
 
+      <PageState loading={status.loading} error={status.error} data={status.loaded ? staff : undefined} onRetry={load} emptyText="No operators yet." skeletonRows={3}>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {staff.map(u => (
           <Card key={u.id} className="hover-lift" data-testid={`staff-${u.id}`}>
@@ -74,17 +83,18 @@ export default function StaffPage() {
               </div>
               <div className="flex justify-end gap-1 mt-3">
                 <Button size="icon" variant="ghost" onClick={() => openEdit(u)}><PencilSimple size={16}/></Button>
-                <Button size="icon" variant="ghost" onClick={() => remove(u.id)}><Trash size={16}/></Button>
+                <DeleteButton what={`operator ${u.name}`} description="They will no longer be able to sign in." lockKey={`staff:${u.id}`} onDelete={({ idempotencyKey }) => remove(u, idempotencyKey)} testId={`staff-delete-${u.id}`} />
               </div>
             </CardContent>
           </Card>
         ))}
-        {staff.length === 0 && <p className="text-muted-foreground col-span-full">No operators yet.</p>}
       </div>
+      </PageState>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(v) => { if (!saving) setOpen(v); }}>
         <DialogContent>
           <DialogHeader><DialogTitle className="font-display">{editing ? "Edit Operator" : "New Operator"}</DialogTitle></DialogHeader>
+          <AsyncForm onSubmit={save} lockKey="staff-save" idempotent className="grid gap-4">
           <div className="space-y-4">
             <div><Label>Name</Label><Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} data-testid="staff-name-input"/></div>
             <div><Label>Email</Label><Input type="email" value={form.email} disabled={!!editing} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} data-testid="staff-email-input"/></div>
@@ -108,9 +118,10 @@ export default function StaffPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={save} data-testid="staff-save-btn">Save</Button>
+            <Button variant="outline" disabled={saving} onClick={() => setOpen(false)}>Cancel</Button>
+            <SubmitButton data-testid="staff-save-btn">Save</SubmitButton>
           </DialogFooter>
+          </AsyncForm>
         </DialogContent>
       </Dialog>
     </div>

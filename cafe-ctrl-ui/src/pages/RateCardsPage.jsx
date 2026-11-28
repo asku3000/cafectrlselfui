@@ -1,5 +1,10 @@
-import React, { useEffect, useState } from "react";
-import { api, formatApiError, fmtMoney } from "../lib/apiClient";
+import React, { useState } from "react";
+import { useLoadStatus } from "../lib/async/useAsyncData";
+import PageState from "../components/async/PageState";
+import { useLockHeld } from "../lib/async/actionLocks";
+import DeleteButton from "../components/async/DeleteButton";
+import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
+import { api, fmtMoney, deleteIfExists, withIdempotency } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -66,6 +71,7 @@ export default function RateCardsPage() {
   const [cards, setCards] = useState([]);
   const [gameTypes, setGameTypes] = useState([]);
   const [open, setOpen] = useState(false);
+  const saving = useLockHeld("ratecard-save");
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm());
   const [accessories, setAccessories] = useState([]);
@@ -80,13 +86,11 @@ export default function RateCardsPage() {
     };
   }
 
-  const load = async () => {
-    try {
-      const [c, g, a] = await Promise.all([api.get("/rate-cards"), api.get("/game-types"), api.get("/accessories")]);
-      setCards(c.data); setGameTypes(g.data); setAccessories(a.data);
-    } catch (e) { toast.error(formatApiError(e)); }
+  const fetchPage = async () => {
+    const [c, g, a] = await Promise.all([api.get("/rate-cards"), api.get("/game-types"), api.get("/accessories")]);
+    setCards(c.data); setGameTypes(g.data); setAccessories(a.data);
   };
-  useEffect(() => { load(); }, []);
+  const { reload: load, ...status } = useLoadStatus(fetchPage);
 
   const openNew = () => { setEditing(null); setForm(emptyForm()); setOpen(true); };
   const openEdit = (c) => {
@@ -101,36 +105,35 @@ export default function RateCardsPage() {
     setOpen(true);
   };
 
-  const save = async () => {
-    try {
-      if (!form.game_type_id) return toast.error("Select a game type");
-      if (!form.player_counts.length) return toast.error("Add at least one player count");
-      const pcs = form.player_counts;
-      const payload = {
-        name: form.name,
-        game_type_id: form.game_type_id,
-        billing_interval_minutes: Number(form.billing_interval_minutes),
-        grace_minutes: Number(form.grace_minutes),
-        player_counts: pcs.map((n) => Number(n)),
-        weekday_prices: Object.fromEntries(
-          Object.entries(form.weekday_prices).map(([k, arr]) => [
-            k,
-            (arr || []).map((s) => ({
-              duration: Number(s.duration) || 0,
-              prices: Object.fromEntries(pcs.map((pc) => [String(pc), Number(s.prices?.[String(pc)]) || 0])),
-            })),
-          ])
-        ),
-      };
-      if (editing) await api.put(`/rate-cards/${editing.id}`, payload);
-      else await api.post("/rate-cards", payload);
-      setOpen(false); load(); toast.success("Saved");
-    } catch (e) { toast.error(formatApiError(e)); }
+  const save = async ({ idempotencyKey }) => {
+    if (!form.game_type_id) return toast.error("Select a game type");
+    if (!form.player_counts.length) return toast.error("Add at least one player count");
+    const pcs = form.player_counts;
+    const payload = {
+      name: form.name,
+      game_type_id: form.game_type_id,
+      billing_interval_minutes: Number(form.billing_interval_minutes),
+      grace_minutes: Number(form.grace_minutes),
+      player_counts: pcs.map((n) => Number(n)),
+      weekday_prices: Object.fromEntries(
+        Object.entries(form.weekday_prices).map(([k, arr]) => [
+          k,
+          (arr || []).map((s) => ({
+            duration: Number(s.duration) || 0,
+            prices: Object.fromEntries(pcs.map((pc) => [String(pc), Number(s.prices?.[String(pc)]) || 0])),
+          })),
+        ])
+      ),
+    };
+    if (editing) await api.put(`/rate-cards/${editing.id}`, payload, withIdempotency(idempotencyKey));
+    else await api.post("/rate-cards", payload, withIdempotency(idempotencyKey));
+    setOpen(false); load(); toast.success("Saved");
   };
 
-  const remove = async (id) => {
-    try { await api.delete(`/rate-cards/${id}`); load(); toast.success("Deleted"); }
-    catch (e) { toast.error(formatApiError(e)); }
+  const remove = async (c, idempotencyKey) => {
+    const deleted = await deleteIfExists(`/rate-cards/${c.id}`, withIdempotency(idempotencyKey));
+    load();
+    toast.success(deleted ? "Deleted" : `${c.name} was already deleted`);
   };
 
   const updateSlabDuration = (day, idx, val) => {
@@ -227,14 +230,15 @@ export default function RateCardsPage() {
     });
   };
 
-  const addAccessory = async () => {
+  const addAccessory = async ({ idempotencyKey }) => {
     if (!accForm.name || !accForm.price) return;
-    try { await api.post("/accessories", { name: accForm.name, price: Number(accForm.price) });
-      setAccForm({ name: "", price: "" }); load(); toast.success("Accessory added"); }
-    catch (e) { toast.error(formatApiError(e)); }
+    await api.post("/accessories", { name: accForm.name, price: Number(accForm.price) }, withIdempotency(idempotencyKey));
+    setAccForm({ name: "", price: "" }); load(); toast.success("Accessory added");
   };
-  const removeAccessory = async (id) => {
-    try { await api.delete(`/accessories/${id}`); load(); } catch (e) { toast.error(formatApiError(e)); }
+  const removeAccessory = async (a, idempotencyKey) => {
+    const deleted = await deleteIfExists(`/accessories/${a.id}`, withIdempotency(idempotencyKey));
+    load();
+    toast.success(deleted ? "Accessory deleted" : `${a.name} was already deleted`);
   };
 
   return (
@@ -252,6 +256,7 @@ export default function RateCardsPage() {
         <Button onClick={openNew} data-testid="ratecard-new-btn"><Plus size={18} weight="bold" /> New Rate Card</Button>
       </div>
 
+      <PageState loading={status.loading} error={status.error} data={status.loaded ? cards : undefined} onRetry={load} emptyText="No rate cards yet." skeletonRows={3}>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {cards.map((c) => {
           const gt = gameTypes.find((g) => g.id === c.game_type_id);
@@ -266,7 +271,7 @@ export default function RateCardsPage() {
                   </div>
                   <div className="flex gap-1">
                     <Button size="icon" variant="ghost" onClick={() => openEdit(c)} data-testid={`ratecard-edit-${c.id}`}><PencilSimple size={18} /></Button>
-                    <Button size="icon" variant="ghost" onClick={() => remove(c.id)}><Trash size={18} /></Button>
+                    <DeleteButton what={`rate card ${c.name}`} size={18} lockKey={`ratecard:${c.id}`} onDelete={({ idempotencyKey }) => remove(c, idempotencyKey)} testId={`rc-delete-${c.id}`} />
                   </div>
                 </div>
               </CardHeader>
@@ -298,17 +303,18 @@ export default function RateCardsPage() {
             </Card>
           );
         })}
-        {cards.length === 0 && <p className="text-muted-foreground col-span-full">No rate cards yet.</p>}
       </div>
+      </PageState>
 
       <Card>
         <CardHeader><CardTitle className="font-display">Accessories (flat-priced add-ons)</CardTitle></CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex gap-2 flex-wrap">
+          <AsyncForm onSubmit={addAccessory} lockKey="accessory-add" idempotent className="flex gap-2 flex-wrap">
             <Input placeholder="Accessory name" value={accForm.name} onChange={(e) => setAccForm((s) => ({ ...s, name: e.target.value }))} className="max-w-xs" data-testid="acc-name-input" />
             <Input placeholder="Price" type="number" value={accForm.price} onChange={(e) => setAccForm((s) => ({ ...s, price: e.target.value }))} className="max-w-[120px]" data-testid="acc-price-input" />
-            <Button onClick={addAccessory} data-testid="acc-add-btn">Add</Button>
-          </div>
+            <SubmitButton data-testid="acc-add-btn">Add</SubmitButton>
+          </AsyncForm>
+          <PageState loading={status.loading} error={status.loaded ? null : status.error} data={status.loaded ? accessories : undefined} emptyText="No accessories yet." skeletonRows={1} variant="spinner">
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
             {accessories.map((a) => (
               <div key={a.id} className="border border-border rounded-md p-3 flex justify-between items-center" data-testid={`acc-${a.id}`}>
@@ -316,16 +322,18 @@ export default function RateCardsPage() {
                   <div className="font-semibold">{a.name}</div>
                   <div className="font-mono text-sm">{fmtMoney(a.price)}</div>
                 </div>
-                <Button size="icon" variant="ghost" onClick={() => removeAccessory(a.id)}><Trash size={16} /></Button>
+                <DeleteButton what={a.name} lockKey={`accessory:${a.id}`} onDelete={({ idempotencyKey }) => removeAccessory(a, idempotencyKey)} testId={`acc-delete-${a.id}`} />
               </div>
             ))}
           </div>
+          </PageState>
         </CardContent>
       </Card>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(v) => { if (!saving) setOpen(v); }}>
         <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="font-display">{editing ? "Edit" : "New"} Rate Card</DialogTitle></DialogHeader>
+          <AsyncForm onSubmit={save} lockKey="ratecard-save" idempotent className="grid gap-4">
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -433,9 +441,10 @@ export default function RateCardsPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={save} data-testid="rc-save-btn">Save</Button>
+            <Button variant="outline" disabled={saving} onClick={() => setOpen(false)}>Cancel</Button>
+            <SubmitButton data-testid="rc-save-btn">Save</SubmitButton>
           </DialogFooter>
+          </AsyncForm>
         </DialogContent>
       </Dialog>
     </div>

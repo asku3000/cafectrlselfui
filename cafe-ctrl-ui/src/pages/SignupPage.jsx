@@ -1,7 +1,7 @@
 import React, { useState } from "react";
+import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
 import { Link, useNavigate } from "react-router-dom";
-import { useAuth, formatApiError } from "../contexts/AuthContext";
-import { Button } from "../components/ui/button";
+import { useAuth } from "../contexts/AuthContext";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Card, CardContent } from "../components/ui/card";
@@ -17,19 +17,12 @@ export default function SignupPage() {
     name: "", email: "", password: "",
     cafe_name: "", phone: "", address: "",
   });
-  const [busy, setBusy] = useState(false);
   const onChange = (k) => (e) => setForm(s => ({ ...s, [k]: e.target.value }));
 
-  const submit = async (e) => {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      await signup(form);
-      toast.success("Account created!");
-      navigate("/setup");
-    } catch (err) {
-      toast.error(formatApiError(err));
-    } finally { setBusy(false); }
+  const submit = async () => {
+    await signup(form);
+    toast.success("Account created!");
+    navigate("/setup");
   };
 
   return (
@@ -51,7 +44,7 @@ export default function SignupPage() {
               <span className="bg-card px-3 uppercase tracking-widest text-muted-foreground font-bold">or with email</span>
             </div>
           </div>
-          <form onSubmit={submit} className="space-y-4" data-testid="signup-form">
+          <AsyncForm onSubmit={submit} className="space-y-4" data-testid="signup-form">
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
                 <Label>Your Name</Label>
@@ -78,10 +71,8 @@ export default function SignupPage() {
                 <Textarea value={form.address} onChange={onChange("address")} data-testid="signup-address-input"/>
               </div>
             </div>
-            <Button type="submit" disabled={busy} className="w-full" data-testid="signup-submit-btn">
-              {busy ? "Creating..." : "Create Account"}
-            </Button>
-          </form>
+            <SubmitButton className="w-full" loadingText="Creating…" data-testid="signup-submit-btn">Create Account</SubmitButton>
+          </AsyncForm>
           <div className="mt-6 text-sm text-muted-foreground text-center">
             Already have an account?{" "}
             <Link to="/login" className="text-primary font-semibold hover:underline" data-testid="goto-login-link">Sign in</Link>

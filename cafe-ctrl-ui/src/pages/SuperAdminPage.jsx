@@ -1,39 +1,31 @@
-import React, { useEffect, useState } from "react";
-import { api, formatApiError, fmtMoney } from "../lib/apiClient";
+import React, { useState } from "react";
+import { useLoadStatus } from "../lib/async/useAsyncData";
+import PageState from "../components/async/PageState";
+import AsyncButton from "../components/async/AsyncButton";
+import { api, fmtMoney } from "../lib/apiClient";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { useNavigate } from "react-router-dom";
 import { Sun, MoonStars, SignOut, Buildings, Users, Receipt, Lightning } from "@phosphor-icons/react";
-import { toast } from "sonner";
 
 export default function SuperAdminPage() {
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
+  const signOut = async () => { await logout(); navigate("/login"); };
   const [stats, setStats] = useState({});
   const [cafes, setCafes] = useState([]);
 
-useEffect(() => {
-    // 1. Define the function
-    const fetchDashboardData = async () => {
-      try {
-        const [s, c] = await Promise.all([
-          api.get("/super-admin/stats"), 
-          api.get("/super-admin/cafes")
-        ]);
-        setStats(s.data); 
-        setCafes(c.data);
-      } catch(err) {
-        console.error("Failed to load cafes:", err);
-        toast.error("Could not load cafes from server.");
-      }
-    };
-
-    // 2. Actually execute it!
-    fetchDashboardData();
-  }, []);
+  const status = useLoadStatus(async () => {
+    const [s, c] = await Promise.all([
+      api.get("/super-admin/stats"), 
+      api.get("/super-admin/cafes")
+    ]);
+    setStats(s.data); 
+    setCafes(c.data);
+  });
 
   return (
     <div className="min-h-screen bg-background">
@@ -50,9 +42,9 @@ useEffect(() => {
             <Button size="icon" variant="ghost" onClick={toggle} data-testid="sa-theme-toggle">
               {theme === "dark" ? <Sun size={18}/> : <MoonStars size={18}/>}
             </Button>
-            <Button size="icon" variant="ghost" onClick={async () => { await logout(); navigate("/login"); }} data-testid="sa-logout">
+            <AsyncButton size="icon" variant="ghost" lockKey="logout" onClick={signOut} data-testid="sa-logout">
               <SignOut size={18}/>
-            </Button>
+            </AsyncButton>
           </div>
         </div>
       </header>
@@ -61,6 +53,7 @@ useEffect(() => {
           <div className="uppercase-label">Overview</div>
           <h1 className="text-5xl font-display font-extrabold">All Cafes</h1>
         </div>
+        <PageState loading={status.loading} error={status.error} data={status.loaded ? cafes : undefined} isEmpty={false} onRetry={status.reload} skeletonRows={5}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <KPI icon={Buildings} label="Total Cafes" value={stats.total_cafes || 0}/>
           <KPI icon={Users} label="Total Users" value={stats.total_users || 0}/>
@@ -87,6 +80,7 @@ useEffect(() => {
             </table>
           </CardContent>
         </Card>
+        </PageState>
       </main>
     </div>
   );

@@ -1,6 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
+import { useLoadStatus } from "../lib/async/useAsyncData";
+import PageState from "../components/async/PageState";
+import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { api, formatApiError, fmtMoney, fmtDateTime, fmtDuration, minutesBetween, toLocalInput, fromLocalInput, fmtPaise, parseHundredths, hundredthsToInput } from "../lib/apiClient";
+import { api, formatApiError, fmtMoney, fmtDateTime, fmtDuration, minutesBetween, toLocalInput, fromLocalInput, fmtPaise, parseHundredths, hundredthsToInput, withIdempotency } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -12,9 +15,10 @@ import { toast } from "sonner";
 import { useAuth } from "../contexts/AuthContext";
 import ReceiptPrint, { buildReceiptText } from "../components/Receipt";
 import DateTimePicker from "../components/DateTimePicker";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "../components/ui/alert-dialog";
 import LocalSearchableSelect from "../components/LocalSearchableSelect";
-import { CircleNotchIcon } from "@phosphor-icons/react";
+import AsyncButton from "../components/async/AsyncButton";
+import ConfirmAction from "../components/async/ConfirmAction";
+import { useLockHeld } from "../lib/async/actionLocks";
 import MembershipCardPicker, { MemberCardSummary } from "../components/membership/MembershipCardPicker";
 
 export default function SessionDetailPage() {
@@ -41,8 +45,6 @@ export default function SessionDetailPage() {
   const [cardAmount, setCardAmount] = useState(""); // rupees typed by staff; "" = don't use the card
   const [undoAction, setUndoAction] = useState(null); // "reopen" | "void"
   const [undoReason, setUndoReason] = useState("");
-  const [isUndoing, setIsUndoing] = useState(false);
-  const [isClosingBill, setIsClosingBill] = useState(false);
   const [itemPick, setItemPick] = useState({ open: false, gameId: null, type: "inventory", ref_id: "", qty: 1 });
 
   // --- NEW BACKDATE STATES ---
@@ -53,24 +55,22 @@ export default function SessionDetailPage() {
   // --- MEMBERSHIP CARD TAGGING ---
   const [tagOpen, setTagOpen] = useState(false);
   const [tagPick, setTagPick] = useState(null);
-  const [isTagging, setIsTagging] = useState(false);
-  const saveMembershipCard = async (card) => {
-    if (isTagging) return;
-    try {
-      setIsTagging(true);
-      const { data } = await api.put(`/sessions/${id}/membership-card`, { membership_card_id: card ? card.id : null });
-      setSess(data);
-      setTagOpen(false);
-      toast.success(card ? `Card ${card.card_number} tagged` : "Membership card removed");
-    } catch (e) { toast.error(formatApiError(e)); }
-    finally { setIsTagging(false); }
+  // Every action on this session shares one lock: only one can run at a time (e.g. not End game + Close Bill)
+  const LOCK = `session:${id}`;
+  const sessionBusy = useLockHeld(LOCK);
+
+  const saveMembershipCard = async ({ idempotencyKey }, card) => {
+    const { data } = await api.put(`/sessions/${id}/membership-card`, { membership_card_id: card ? card.id : null },
+      withIdempotency(idempotencyKey));
+    setSess(data);
+    setTagOpen(false);
+    toast.success(card ? `Card ${card.card_number} tagged` : "Membership card removed");
   };
   
 
   const canBill = user?.role === "CAFE_ADMIN" || user?.permissions?.includes("billing");
 
-  const load = async () => {
-    try {
+  const fetchPage = async ({ isStale }) => {
       const [s, r, inv, acc, rc] = await Promise.all([
         api.get(`/sessions/${id}`),
         api.get("/resources"),
@@ -78,10 +78,10 @@ export default function SessionDetailPage() {
         api.get("/accessories"),
         api.get("/rate-cards"),
       ]);
+      if (isStale()) return; // opened another session meanwhile
       setSess(s.data); setResources(r.data); setInventory(inv.data); setAccessories(acc.data); setRateCards(rc.data);
-    } catch (e) { toast.error(formatApiError(e)); }
   };
-  useEffect(() => { load(); const t = setInterval(load, 20000); return () => clearInterval(t); }, [id]);
+  const { reload: load, ...status } = useLoadStatus(fetchPage, [id], { pollMs: 20000 });
 
   const playerCountsFor = (rid) => {
     const r = resources.find((x) => x.id === rid);
@@ -122,12 +122,10 @@ export default function SessionDetailPage() {
     }
   };
   // Upgraded to bundle the manual timestamp to the backend
-  const checkout = async () => {
-    if (isClosingBill) return; // double-click guard (the server also refuses a second checkout)
+  const checkout = async ({ idempotencyKey }) => {
+    const filtered = payments.filter(p => Number(p.amount) > 0);
+    const cardP = cardAmount === "" ? 0 : parseHundredths(cardAmount);
     try {
-      setIsClosingBill(true);
-      const filtered = payments.filter(p => Number(p.amount) > 0);
-      const cardP = cardAmount === "" ? 0 : parseHundredths(cardAmount);
       await api.post(`/sessions/${id}/checkout`, {
         adjustment: Number(adjustment || 0),
         payments: filtered,
@@ -137,94 +135,61 @@ export default function SessionDetailPage() {
         manual_billed_at: useBackdate ? fromLocalInput(backdateTime) : (cardP > 0 && bill?.priced_until ? bill.priced_until : null),
         // Only sent when the card is actually used, so non-member checkouts are unchanged
         ...(cardP > 0 ? { membership_amount_paise: cardP } : {}),
-      });
-      toast.success("Bill closed successfully!");
-      setBillingOpen(false);
-      setUseBackdate(false); // reset
-      load();
+      }, withIdempotency(idempotencyKey));
     } catch (e) {
-      toast.error(formatApiError(e));
+      // Billed from another device in the meantime: show the bill instead of the stale dialog
       if (e?.response?.status === 409 && /already/i.test(formatApiError(e))) { setBillingOpen(false); load(); }
-    } finally { setIsClosingBill(false); }
+      throw e;
+    }
+    toast.success("Bill closed successfully!");
+    setBillingOpen(false);
+    setUseBackdate(false); // reset
+    load();
   };
 
-  const undoBill = async () => {
-    if (isUndoing) return;
+  const undoBill = async ({ idempotencyKey }) => {
     if (!undoReason.trim()) return toast.error("A reason is required");
-    try {
-      setIsUndoing(true);
-      const { data } = await api.post(`/sessions/${id}/${undoAction}`, { reason: undoReason });
-      setSess(data);
-      toast.success(undoAction === "reopen" ? "Bill reopened. Card payments were returned to the card" : "Bill voided. Card payments were returned to the card");
-      setUndoAction(null);
-      setUndoReason("");
-      load();
-    } catch (e) { toast.error(formatApiError(e)); }
-    finally { setIsUndoing(false); }
+    const { data } = await api.post(`/sessions/${id}/${undoAction}`, { reason: undoReason }, withIdempotency(idempotencyKey));
+    setSess(data);
+    toast.success(undoAction === "reopen" ? "Bill reopened. Card payments were returned to the card" : "Bill voided. Card payments were returned to the card");
+    setUndoAction(null);
+    setUndoReason("");
+    load();
   };
 
   const handleBackdateChange = (newDateTime) => {
     setBackdateTime(newDateTime);
     previewBill(newDateTime); // Re-fetch the subtotal live as they change the time!
   };
-  const [isAddingGame, setIsAddingGame] = useState(false);
   
-  const addGame = async () => {
-    try {
-      if(isAddingGame) return; // Prevent multiple submissions
-      if (!newGame.resource_id) return toast.error("Pick a resource");
-      setIsAddingGame(true);
-      await api.post(`/sessions/${id}/games`, {
-        resource_id: newGame.resource_id,
-        player_count: Number(newGame.player_count) || 1,
-        start_time: fromLocalInput(newGame.start_time),
-      });
-      setAddGameOpen(false); load(); toast.success("Game added");
-    } catch (e) { toast.error(formatApiError(e)); }
-    finally { setIsAddingGame(false); }
+  const addGame = async ({ idempotencyKey }) => {
+    if (!newGame.resource_id) return toast.error("Pick a resource");
+    await api.post(`/sessions/${id}/games`, {
+      resource_id: newGame.resource_id,
+      player_count: Number(newGame.player_count) || 1,
+      start_time: fromLocalInput(newGame.start_time),
+    }, withIdempotency(idempotencyKey));
+    setAddGameOpen(false); load(); toast.success("Game added");
   };
-  const endGame = async () => {
-    try {
-      await api.post(`/sessions/${id}/games/${endGameOpen}/end`, { end_time: fromLocalInput(endTime) });
-      setEndGameOpen(null); load(); toast.success("Game soft-closed");
-    } catch (e) { toast.error(formatApiError(e)); }
+  const endGame = async ({ idempotencyKey }) => {
+    await api.post(`/sessions/${id}/games/${endGameOpen}/end`, { end_time: fromLocalInput(endTime) }, withIdempotency(idempotencyKey));
+    setEndGameOpen(null); load(); toast.success("Game soft-closed");
   };
-  const addItem = async () => {
-    try {
-      if (!itemPick.ref_id) return;
-      await api.post(`/sessions/${id}/games/${itemPick.gameId}/items`, { type: itemPick.type, ref_id: itemPick.ref_id, qty: Number(itemPick.qty) });
-      setItemPick({ open: false, gameId: null, type: "inventory", ref_id: "", qty: 1 });
-      load(); toast.success("Item added");
-    } catch (e) { toast.error(formatApiError(e)); }
+  const addItem = async ({ idempotencyKey }) => {
+    if (!itemPick.ref_id) return;
+    await api.post(`/sessions/${id}/games/${itemPick.gameId}/items`,
+      { type: itemPick.type, ref_id: itemPick.ref_id, qty: Number(itemPick.qty) }, withIdempotency(idempotencyKey));
+    setItemPick({ open: false, gameId: null, type: "inventory", ref_id: "", qty: 1 });
+    load(); toast.success("Item added");
   };
-  const removeItem = async (gameId, itemId, itemName) => {
-    try {
-      // 1. Tell the backend to delete it
-      await api.delete(`/sessions/${id}/games/${gameId}/items/${itemId}`);
-      toast.success(`Removed ${itemName}`);
-
-      // 2. Instantly remove it from the React state (No race conditions!)
-      setSess((prev) => {
-        if (!prev) return prev;
-        
-        const updatedGames = prev.games.map(game => {
-          // Find the specific game where the item was deleted
-          if (game.id === gameId) {
-            return {
-              ...game,
-              // Filter out the deleted item by its ID
-              items: game.items.filter(item => item.id !== itemId)
-            };
-          }
-          return game;
-        });
-        
-        return { ...prev, games: updatedGames };
-      });
-
-    } catch (e) { 
-      toast.error(formatApiError(e)); 
-    }
+  const removeItem = async ({ idempotencyKey }, gameId, itemId, itemName) => {
+    await api.delete(`/sessions/${id}/games/${gameId}/items/${itemId}`, withIdempotency(idempotencyKey));
+    toast.success(`Removed ${itemName}`);
+    // Remove it from the screen straight away
+    setSess((prev) => prev && ({
+      ...prev,
+      games: prev.games.map(game => game.id === gameId ? { ...game, items: game.items.filter(item => item.id !== itemId) } : game),
+    }));
   };
 
   const recalcBill = () => {
@@ -256,12 +221,10 @@ export default function SessionDetailPage() {
     return ps.map((p, j) => j === 0 ? { ...p, amount: Math.max(0, grandPaise - (cardPaise || 0) - rest) / 100 } : p);
   });
 
-  const cancelSession = async () => {
-    try {
-      await api.post(`/sessions/${id}/cancel`);
-      toast.success("Session cancelled");
-      navigate("/sessions");
-    } catch (e) { toast.error(formatApiError(e)); }
+  const cancelSession = async ({ idempotencyKey }) => {
+    await api.post(`/sessions/${id}/cancel`, null, withIdempotency(idempotencyKey));
+    toast.success("Session cancelled");
+    navigate("/sessions");
   };
 
   const printReceipt = () => { window.print(); };
@@ -274,7 +237,9 @@ const shareWhatsApp = () => {
     window.open(url, "_blank");
   };
 
-  if (!sess) return <div className="text-muted-foreground">Loading…</div>;
+  if (!sess || String(sess.id) !== String(id)) {
+    return <PageState loading={status.loading} error={status.error} data={undefined} onRetry={load} skeletonRows={6} />;
+  }
 
   const isBilled = sess.status === "billed";
   const isVoided = sess.status === "voided";
@@ -291,6 +256,7 @@ const searchOptions = currentList.map(it => ({
 
   return (
     <div className="space-y-6" data-testid="session-detail-root">
+      {status.error && <PageState error={status.error} data={sess} onRetry={load} />}
       <Link to="/sessions" className="text-sm text-muted-foreground inline-flex items-center gap-1 hover:text-foreground"><ArrowLeft size={16}/> Back to sessions</Link>
       <div className="flex justify-between items-end flex-wrap gap-4">
         <div>
@@ -304,26 +270,16 @@ const searchOptions = currentList.map(it => ({
               <Link to={`/audit-log?entity_type=SESSION&entity_id=${id}`}>History</Link>
             </Button>
           )}
-          {!isBilled && !isCancelled && <Button variant="outline" onClick={() => { setNewGame({ resource_id: "", player_count: 1, start_time: toLocalInput() }); setAddGameOpen(true); }} data-testid="add-game-btn"><Plus size={16}/> Add Game</Button>}
-          {!isBilled && !isCancelled && canBill && <Button onClick={() => previewBill(null)} data-testid="bill-btn"><Receipt size={16}/> Bill</Button>}
+          {!isBilled && !isCancelled && <Button variant="outline" disabled={sessionBusy} onClick={() => { setNewGame({ resource_id: "", player_count: 1, start_time: toLocalInput() }); setAddGameOpen(true); }} data-testid="add-game-btn"><Plus size={16}/> Add Game</Button>}
+          {!isBilled && !isCancelled && canBill && <AsyncButton lockKey={LOCK} onClick={() => previewBill(null)} data-testid="bill-btn"><Receipt size={16}/> Bill</AsyncButton>}
           {!isBilled && !isCancelled && isAdmin && (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="outline" className="text-destructive hover:text-destructive" data-testid="cancel-session-btn"><XCircle size={16}/> Cancel</Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Cancel this session?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This will discard the session for <b>{sess.customer_name}</b> without billing. This cannot be undone. Use only when an entry was started by mistake or the customer left without playing.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel data-testid="cancel-confirm-no">Keep session</AlertDialogCancel>
-                  <AlertDialogAction onClick={cancelSession} data-testid="cancel-confirm-yes">Yes, cancel</AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+            <ConfirmAction
+              trigger={<Button variant="outline" disabled={sessionBusy} className="text-destructive hover:text-destructive" data-testid="cancel-session-btn"><XCircle size={16}/> Cancel</Button>}
+              title="Cancel this session?"
+              description={<>This will discard the session for <b>{sess.customer_name}</b> without billing. This cannot be undone. Use only when an entry was started by mistake or the customer left without playing.</>}
+              cancelLabel="Keep session" confirmLabel="Yes, cancel" destructive
+              onConfirm={cancelSession} lockKey={LOCK} idempotent confirmTestId="cancel-confirm-yes"
+            />
           )}
           {isBilled && (
             <>
@@ -334,8 +290,8 @@ const searchOptions = currentList.map(it => ({
           )}
           {isBilled && isAdmin && (
             <>
-              <Button variant="outline" onClick={() => { setUndoReason(""); setUndoAction("reopen"); }} data-testid="reopen-bill-btn">Reopen bill</Button>
-              <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => { setUndoReason(""); setUndoAction("void"); }} data-testid="void-bill-btn">Void bill</Button>
+              <Button variant="outline" disabled={sessionBusy} onClick={() => { setUndoReason(""); setUndoAction("reopen"); }} data-testid="reopen-bill-btn">Reopen bill</Button>
+              <Button variant="outline" disabled={sessionBusy} className="text-destructive hover:text-destructive" onClick={() => { setUndoReason(""); setUndoAction("void"); }} data-testid="void-bill-btn">Void bill</Button>
             </>
           )}
           {isCancelled && <span className="px-3 py-2 rounded-md bg-destructive/15 text-destructive font-bold uppercase tracking-widest text-xs">{isVoided ? `Voided · ${fmtMoney(sess.bill_total)}` : "Cancelled"}</span>}
@@ -347,12 +303,13 @@ const searchOptions = currentList.map(it => ({
           {sess.membership_card ? (
             <MemberCardSummary card={sess.membership_card} actions={!isBilled && !isCancelled && (
               <>
-                <Button size="sm" variant="ghost" className="h-7" onClick={() => { setTagPick(null); setTagOpen(true); }} data-testid="member-card-change">Change</Button>
-                <Button size="sm" variant="ghost" className="h-7 text-destructive hover:text-destructive" disabled={isTagging} onClick={() => saveMembershipCard(null)} data-testid="member-card-remove">Remove</Button>
+                <Button size="sm" variant="ghost" className="h-7" disabled={sessionBusy} onClick={() => { setTagPick(null); setTagOpen(true); }} data-testid="member-card-change">Change</Button>
+                <AsyncButton size="sm" variant="ghost" className="h-7 text-destructive hover:text-destructive" lockKey={LOCK} idempotent
+                             onClick={(ctx) => saveMembershipCard(ctx, null)} data-testid="member-card-remove">Remove</AsyncButton>
               </>
             )}/>
           ) : (
-            <Button variant="outline" size="sm" onClick={() => { setTagPick(null); setTagOpen(true); }} data-testid="member-card-tag">
+            <Button variant="outline" size="sm" disabled={sessionBusy} onClick={() => { setTagPick(null); setTagOpen(true); }} data-testid="member-card-tag">
               + Tag membership card
             </Button>
           )}
@@ -383,10 +340,10 @@ const searchOptions = currentList.map(it => ({
                     "bg-emerald-500/15 text-emerald-500"
                   }`}>{g.status}</span>
                   {!isBilled && g.status === "active" && (
-                    <Button size="sm" variant="outline" onClick={() => { setEndGameOpen(g.id); setEndTime(toLocalInput()); }} data-testid={`end-${g.id}`}><StopCircle size={14}/> End</Button>
+                    <Button size="sm" variant="outline" disabled={sessionBusy} onClick={() => { setEndGameOpen(g.id); setEndTime(toLocalInput()); }} data-testid={`end-${g.id}`}><StopCircle size={14}/> End</Button>
                   )}
                   {!isBilled && !isCancelled && (
-                    <Button size="sm" variant="outline" onClick={() => setItemPick({ open: true, gameId: g.id, type: "inventory", ref_id: "", qty: 1 })} data-testid={`add-item-${g.id}`}><ForkKnife size={14}/> Add Item</Button>
+                    <Button size="sm" variant="outline" disabled={sessionBusy} onClick={() => setItemPick({ open: true, gameId: g.id, type: "inventory", ref_id: "", qty: 1 })} data-testid={`add-item-${g.id}`}><ForkKnife size={14}/> Add Item</Button>
                   )}
                 </div>
               </div>
@@ -404,16 +361,19 @@ const searchOptions = currentList.map(it => ({
                       </div>
                       <span className="font-mono shrink-0">{fmtMoney(it.total)}</span>
                       {!isBilled && !isCancelled && (
-                        <Button
+                        <AsyncButton
                           size="icon"
                           variant="ghost"
                           className="h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive shrink-0"
-                          onClick={() => removeItem(g.id, it.id, it.name)}
+                          lockKey={LOCK}
+                          idempotent
+                          onClick={(ctx) => removeItem(ctx, g.id, it.id, it.name)}
                           title="Remove item"
+                          aria-label={`Remove ${it.name}`}
                           data-testid={`remove-item-${it.id}`}
                         >
                           <Trash size={16} weight="bold" />
-                        </Button>
+                        </AsyncButton>
                       )}
                     </li>
                   ))}
@@ -444,9 +404,10 @@ const searchOptions = currentList.map(it => ({
       )}
 
       {/* Reopen / void a billed session (admin) */}
-      <Dialog open={!!undoAction} onOpenChange={v => !v && setUndoAction(null)}>
+      <Dialog open={!!undoAction} onOpenChange={v => !v && !sessionBusy && setUndoAction(null)}>
         <DialogContent>
           <DialogHeader><DialogTitle className="font-display">{undoAction === "reopen" ? "Reopen this bill?" : "Void this bill?"}</DialogTitle></DialogHeader>
+          <AsyncForm onSubmit={undoBill} lockKey={LOCK} idempotent className="grid gap-4">
           <div className="space-y-3 text-sm">
             <p className="text-muted-foreground">
               {undoAction === "reopen"
@@ -457,32 +418,34 @@ const searchOptions = currentList.map(it => ({
             <div><Label>Reason (required)</Label><Input value={undoReason} maxLength={300} onChange={e => setUndoReason(e.target.value)} data-testid="undo-reason"/></div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setUndoAction(null)}>Keep bill</Button>
-            <Button variant={undoAction === "void" ? "destructive" : "default"} onClick={undoBill} disabled={isUndoing} data-testid="undo-confirm">
-              {isUndoing ? "Saving…" : undoAction === "reopen" ? "Reopen bill" : "Void bill"}
-            </Button>
+            <Button variant="outline" disabled={sessionBusy} onClick={() => setUndoAction(null)}>Keep bill</Button>
+            <SubmitButton variant={undoAction === "void" ? "destructive" : "default"} data-testid="undo-confirm">
+              {undoAction === "reopen" ? "Reopen bill" : "Void bill"}
+            </SubmitButton>
           </DialogFooter>
+          </AsyncForm>
         </DialogContent>
       </Dialog>
 
       {/* Tag / change membership card */}
-      <Dialog open={tagOpen} onOpenChange={setTagOpen}>
+      <Dialog open={tagOpen} onOpenChange={v => !sessionBusy && setTagOpen(v)}>
         <DialogContent className="overflow-visible">
           <DialogHeader><DialogTitle className="font-display">{sess.membership_card ? "Change membership card" : "Tag membership card"}</DialogTitle></DialogHeader>
           <MembershipCardPicker value={tagPick} onChange={setTagPick} autoFocus/>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTagOpen(false)}>Cancel</Button>
-            <Button onClick={() => saveMembershipCard(tagPick)} disabled={!tagPick || isTagging} data-testid="member-card-save">
-              {isTagging ? "Saving…" : "Tag card"}
-            </Button>
+            <Button variant="outline" disabled={sessionBusy} onClick={() => setTagOpen(false)}>Cancel</Button>
+            <AsyncButton onClick={(ctx) => saveMembershipCard(ctx, tagPick)} disabled={!tagPick} lockKey={LOCK} idempotent data-testid="member-card-save">
+              Tag card
+            </AsyncButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* Add Game */}
-      <Dialog open={addGameOpen} onOpenChange={setAddGameOpen}>
+      <Dialog open={addGameOpen} onOpenChange={v => !sessionBusy && setAddGameOpen(v)}>
         <DialogContent>
           <DialogHeader><DialogTitle className="font-display">Add another game</DialogTitle></DialogHeader>
+          <AsyncForm onSubmit={addGame} lockKey={LOCK} idempotent className="grid gap-4">
           <div className="space-y-4">
             <div>
               <Label>Resource</Label>
@@ -511,39 +474,33 @@ const searchOptions = currentList.map(it => ({
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAddGameOpen(false)}>Cancel</Button>
-            <Button onClick={addGame} data-testid="add-game-save">
-              {isAddingGame ? (
-                <>
-                <CircleNotchIcon className="animate-spin mr-2" />
-                Adding...
-                </>
-                ) : (
-                "Add"
-                )}
-              </Button>
+            <Button variant="outline" disabled={sessionBusy} onClick={() => setAddGameOpen(false)}>Cancel</Button>
+            <SubmitButton data-testid="add-game-save">Add</SubmitButton>
 
           </DialogFooter>
+          </AsyncForm>
         </DialogContent>
       </Dialog>
 
       {/* End Game */}
-      <Dialog open={!!endGameOpen} onOpenChange={(v) => !v && setEndGameOpen(null)}>
+      <Dialog open={!!endGameOpen} onOpenChange={(v) => !v && !sessionBusy && setEndGameOpen(null)}>
         <DialogContent>
           <DialogHeader><DialogTitle className="font-display">End game</DialogTitle></DialogHeader>
+          <AsyncForm onSubmit={endGame} lockKey={LOCK} idempotent className="grid gap-4">
           <div>
             <Label>End Time</Label>
             <DateTimePicker value={endTime} onChange={setEndTime} data-testid="end-time-input"/>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEndGameOpen(null)}>Cancel</Button>
-            <Button onClick={endGame} data-testid="end-time-save">Soft Close</Button>
+            <Button variant="outline" disabled={sessionBusy} onClick={() => setEndGameOpen(null)}>Cancel</Button>
+            <SubmitButton data-testid="end-time-save">Soft Close</SubmitButton>
           </DialogFooter>
+          </AsyncForm>
         </DialogContent>
       </Dialog>
 
       {/* Add Item */}
-      <Dialog open={itemPick.open} onOpenChange={(v) => setItemPick(s => ({ ...s, open: v }))}>
+      <Dialog open={itemPick.open} onOpenChange={(v) => !sessionBusy && setItemPick(s => ({ ...s, open: v }))}>
   <DialogContent className="overflow-visible"> {/* Ensure popover can break out of modal bounds if needed */}
     <DialogHeader><DialogTitle className="font-display">Add item</DialogTitle></DialogHeader>
     <div className="space-y-4">
@@ -574,14 +531,14 @@ const searchOptions = currentList.map(it => ({
     </div>
     
     <DialogFooter>
-      <Button variant="outline" onClick={() => setItemPick({ open: false, gameId: null, type: "inventory", ref_id: "", qty: 1 })}>Cancel</Button>
-      <Button onClick={addItem} data-testid="item-add-save" disabled={!itemPick.ref_id}>Add</Button>
+      <Button variant="outline" disabled={sessionBusy} onClick={() => setItemPick({ open: false, gameId: null, type: "inventory", ref_id: "", qty: 1 })}>Cancel</Button>
+      <AsyncButton onClick={addItem} lockKey={LOCK} idempotent data-testid="item-add-save" disabled={!itemPick.ref_id}>Add</AsyncButton>
     </DialogFooter>
   </DialogContent>
 </Dialog>
 
       {/* Billing */}
-      <Dialog open={billingOpen} onOpenChange={setBillingOpen}>
+      <Dialog open={billingOpen} onOpenChange={v => !sessionBusy && setBillingOpen(v)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle className="font-display">Final Bill — {sess.customer_name}</DialogTitle></DialogHeader>
           {recomputed && (
@@ -695,10 +652,12 @@ const searchOptions = currentList.map(it => ({
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setBillingOpen(false)}>Cancel</Button>
-            <Button onClick={checkout} disabled={!recomputed || payMismatch || !!cardError || isClosingBill} data-testid="checkout-btn">
-              {isClosingBill ? "Closing…" : "Close Bill"}
-            </Button>
+            <Button variant="outline" disabled={sessionBusy} onClick={() => setBillingOpen(false)}>Cancel</Button>
+            <AsyncButton onClick={checkout} disabled={!recomputed || payMismatch || !!cardError} lockKey={LOCK} idempotent
+                         timeoutMessage="We couldn't confirm the bill in time. Check whether it was billed; pressing Close Bill again is safe."
+                         data-testid="checkout-btn">
+              Close Bill
+            </AsyncButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>

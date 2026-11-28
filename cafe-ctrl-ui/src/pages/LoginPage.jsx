@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
+import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
 import { Link, useNavigate } from "react-router-dom";
-import { useAuth, formatApiError } from "../contexts/AuthContext";
+import { useAuth } from "../contexts/AuthContext";
 import { api } from "../lib/apiClient"; 
-import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Card, CardContent } from "../components/ui/card";
@@ -15,7 +15,6 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
   const [forgotMode, setForgotMode] = useState(false);
 
   // 1. Redirect Listener
@@ -35,40 +34,23 @@ export default function LoginPage() {
   }, [user, navigate]);
 
   // 2. Standard Login Form Handler
-  const submit = async (e) => {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      const u = await login(email, password);
-      console.log("🎯 [LOGIN] User object returned:", u);
-      toast.success(`Welcome, ${u.name}!`);
-    } catch (err) {
-      console.error("💥 [LOGIN ERROR]:", err);
-      toast.error(formatApiError(err));
-    } finally { 
-      setBusy(false); 
-    }
+  const submit = async () => {
+    const u = await login(email, password);
+    console.log("🎯 [LOGIN] User object returned:", u);
+    toast.success(`Welcome, ${u.name}!`);
   };
 
   // 3. Forgot Password API Call Handler
-  const handleForgotPassword = async (e) => {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      const { data } = await api.post("/auth/forgot-password", { email });
-      if (data.devResetLink) {
-        console.log("------------------------------------------------");
-        console.log("🔑 [DEV ONLY] PASSWORD RESET LINK:");
-        console.log(data.devResetLink);
-        console.log("------------------------------------------------");
-      }
-      toast.success(data.message || "Recovery link generated in backend console!, Press F12 to view.");
-      setForgotMode(false); // Switch back to login form input view
-    } catch (err) {
-      toast.error(formatApiError(err) || "Failed to process recovery request.");
-    } finally {
-      setBusy(false);
+  const handleForgotPassword = async () => {
+    const { data } = await api.post("/auth/forgot-password", { email });
+    if (data.devResetLink) {
+      console.log("------------------------------------------------");
+      console.log("🔑 [DEV ONLY] PASSWORD RESET LINK:");
+      console.log(data.devResetLink);
+      console.log("------------------------------------------------");
     }
+    toast.success(data.message || "Recovery link generated in backend console!, Press F12 to view.");
+    setForgotMode(false); // Switch back to login form input view
   };
 
   return (
@@ -115,7 +97,7 @@ export default function LoginPage() {
                 <p className="text-sm text-muted-foreground mb-6">
                   Enter your registered email address. If verified as a Cafe Administrator, a temporary secure reset link will generate in your backend terminal logs.
                 </p>
-                <form onSubmit={handleForgotPassword} className="space-y-4">
+                <AsyncForm onSubmit={handleForgotPassword} className="space-y-4">
                   <div>
                     <Label htmlFor="reset-email">Admin Email Address</Label>
                     <Input 
@@ -126,17 +108,15 @@ export default function LoginPage() {
                       required 
                     />
                   </div>
-                  <Button type="submit" className="w-full" disabled={busy}>
-                    {busy ? "Generating recovery token..." : "Generate Reset Link"}
-                  </Button>
-                </form>
+                  <SubmitButton className="w-full" loadingText="Generating…">Generate Reset Link</SubmitButton>
+                </AsyncForm>
               </div>
             ) : (
               /* STANDARD SIGN IN FORM VIEW */
               <div>
                 <div className="uppercase-label mb-2">Sign in</div>
                 <h2 className="text-3xl font-display font-bold mb-6">Welcome back</h2>
-                <form onSubmit={submit} className="space-y-4" data-testid="login-form">
+                <AsyncForm onSubmit={submit} className="space-y-4" data-testid="login-form">
                   <div>
                     <Label htmlFor="email">Email</Label>
                     <Input id="email" type="email" value={email} onChange={e => setEmail(e.target.value)} required data-testid="login-email-input"/>
@@ -154,10 +134,8 @@ export default function LoginPage() {
                     </div>
                     <Input id="password" type="password" value={password} onChange={e => setPassword(e.target.value)} required data-testid="login-password-input"/>
                   </div>
-                  <Button type="submit" className="w-full" disabled={busy} data-testid="login-submit-btn">
-                    {busy ? "Signing in..." : "Sign in"}
-                  </Button>
-                </form>
+                  <SubmitButton className="w-full" loadingText="Signing in…" data-testid="login-submit-btn">Sign in</SubmitButton>
+                </AsyncForm>
                 <div className="relative my-6">
                   <div className="absolute inset-0 flex items-center">
                     <span className="w-full border-t border-border" />

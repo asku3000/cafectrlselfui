@@ -1,5 +1,10 @@
-import React, { useEffect, useState } from "react";
-import { api, formatApiError, fmtMoney } from "../lib/apiClient";
+import React, { useState } from "react";
+import { useLoadStatus } from "../lib/async/useAsyncData";
+import PageState from "../components/async/PageState";
+import { useLockHeld } from "../lib/async/actionLocks";
+import DeleteButton from "../components/async/DeleteButton";
+import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
+import { api, fmtMoney, deleteIfExists, withIdempotency } from "../lib/apiClient";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -19,6 +24,7 @@ export default function InventoryPage() {
   const isAdmin = user?.role === "CAFE_ADMIN";
   const [items, setItems] = useState([]);
   const [open, setOpen] = useState(false);
+  const saving = useLockHeld("inventory-save");
   const [editing, setEditing] = useState(null);
   
   // Added ingredients array to the base form state
@@ -26,8 +32,7 @@ export default function InventoryPage() {
     name: "", category: "snack", price: 0, stock: 0, is_trackable: true, ingredients: [] 
   });
 
-  const load = async () => { 
-  try { 
+  const fetchPage = async () => {
     const { data } = await api.get("/inventory"); 
     // Check if it's an array. If Spring Boot wrapped it in a Page, use data.content
     if (Array.isArray(data)) {
@@ -38,13 +43,9 @@ export default function InventoryPage() {
       console.error("Expected an array but got:", data);
       setItems([]); // Fallback to safe empty array
     }
-  } catch (e) { 
-    toast.error(formatApiError(e)); 
-    setItems([]); 
-  } 
-};
+  };
   
-  useEffect(() => { load(); }, []);
+  const { reload: load, ...status } = useLoadStatus(fetchPage);
 
   const openNew = () => { 
     setEditing(null); 
@@ -92,37 +93,30 @@ export default function InventoryPage() {
     });
   };
 
-  const save = async () => {
-    try {
-      // Map the frontend state into the payload your Java backend expects
-      const payload = { 
-        ...form, 
-        price: Number(form.price), 
-        stock: form.is_trackable ? Number(form.stock) : 0,
-        ingredients: form.is_trackable ? [] : (form.ingredients || []).map(ing => ({
-           raw_material_id: ing.raw_material_id,
-           quantity_required: Number(ing.qty)
-        }))
-      };
-      
-      if (editing) await api.put(`/inventory/${editing.id}`, payload);
-      else await api.post("/inventory", payload);
-      
-      setOpen(false); 
-      load(); 
-      toast.success("Saved");
-    } catch (e) { 
-      toast.error(formatApiError(e)); 
-    }
+  const save = async ({ idempotencyKey }) => {
+    // Map the frontend state into the payload your Java backend expects
+    const payload = { 
+      ...form, 
+      price: Number(form.price), 
+      stock: form.is_trackable ? Number(form.stock) : 0,
+      ingredients: form.is_trackable ? [] : (form.ingredients || []).map(ing => ({
+         raw_material_id: ing.raw_material_id,
+         quantity_required: Number(ing.qty)
+      }))
+    };
+    
+    if (editing) await api.put(`/inventory/${editing.id}`, payload, withIdempotency(idempotencyKey));
+    else await api.post("/inventory", payload, withIdempotency(idempotencyKey));
+    
+    setOpen(false); 
+    load(); 
+    toast.success("Saved");
   };
   
-  const remove = async (id) => { 
-    try { 
-      await api.delete(`/inventory/${id}`); 
-      load(); 
-    } catch (e) { 
-      toast.error(formatApiError(e)); 
-    } 
+  const remove = async (it, idempotencyKey) => {
+    const deleted = await deleteIfExists(`/inventory/${it.id}`, withIdempotency(idempotencyKey));
+    load();
+    toast.success(deleted ? "Deleted" : `${it.name} was already deleted`);
   };
 
   // Generate the options for the Recipe Builder dropdown (only show trackable items)
@@ -143,6 +137,7 @@ export default function InventoryPage() {
 
       <Card>
         <CardContent className="pt-6">
+          <PageState loading={status.loading} error={status.error} data={status.loaded ? items : undefined} onRetry={load} emptyText="No inventory yet." skeletonRows={5}>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -171,21 +166,22 @@ export default function InventoryPage() {
                     {isAdmin && (
                       <td className="text-right">
                         <Button size="icon" variant="ghost" onClick={() => openEdit(it)}><PencilSimple size={16}/></Button>
-                        <Button size="icon" variant="ghost" className="text-destructive" onClick={() => remove(it.id)}><Trash size={16}/></Button>
+                        <DeleteButton what={it.name} className="text-destructive" lockKey={`inventory:${it.id}`} onDelete={({ idempotencyKey }) => remove(it, idempotencyKey)} testId={`inv-delete-${it.id}`} />
                       </td>
                     )}
                   </tr>
                 ))}
-                {items.length === 0 && <tr><td colSpan={isAdmin ? 5 : 4} className="text-center text-muted-foreground py-8">No inventory yet.</td></tr>}
               </tbody>
             </table>
           </div>
+          </PageState>
         </CardContent>
       </Card>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(v) => { if (!saving) setOpen(v); }}>
         <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="font-display">{editing ? "Edit" : "New"} Inventory</DialogTitle></DialogHeader>
+          <AsyncForm onSubmit={save} lockKey="inventory-save" idempotent className="grid gap-4">
           <div className="space-y-4">
             
             <div><Label>Name</Label><Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} data-testid="inv-name-input"/></div>
@@ -263,9 +259,10 @@ export default function InventoryPage() {
 
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={save} data-testid="inv-save-btn">Save</Button>
+            <Button variant="outline" disabled={saving} onClick={() => setOpen(false)}>Cancel</Button>
+            <SubmitButton data-testid="inv-save-btn">Save</SubmitButton>
           </DialogFooter>
+          </AsyncForm>
         </DialogContent>
       </Dialog>
     </div>
