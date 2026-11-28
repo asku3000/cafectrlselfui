@@ -1,4 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
+import PlayerCountField from "../components/PlayerCountField";
+import { isPlayerPriced, playerCountToSend } from "../lib/playerPricing";
 import { useLoadStatus } from "../lib/async/useAsyncData";
 import PageState from "../components/async/PageState";
 import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
@@ -23,7 +25,7 @@ export default function SessionsListPage() {
   const [rateCards, setRateCards] = useState([]);
   const [openNew, setOpenNew] = useState(false);
   const [muted, setMutedState] = useState(ensureMutedFlag());
-  const [form, setForm] = useState({ customer_name: "", customer_phone: "", resource_id: "", player_count: 1, start_time: toLocalInput(), membership_card: null });
+  const [form, setForm] = useState({ customer_name: "", customer_phone: "", resource_id: "", player_count: null, start_time: toLocalInput(), membership_card: null });
   const notifiedRef = useRef(new Set());
 
   // Map resource_id -> rate card (for player_counts options)
@@ -32,11 +34,9 @@ export default function SessionsListPage() {
     if (!r) return null;
     return rateCards.find((c) => c.id === r.rate_card_id) || null;
   };
-  const playerCountsFor = (rid) => {
-    const rc = rcByResource(rid);
-    const pcs = Array.isArray(rc?.player_counts) ? rc.player_counts.map(Number).filter((n) => Number.isFinite(n)) : [];
-    return pcs.length ? Array.from(new Set(pcs)).sort((a, b) => a - b) : [1];
-  };
+  const formRateCard = rcByResource(form.resource_id);
+  // Player-priced resources (e.g. PS5) can't start until a count is picked; nothing is pre-selected or remembered
+  const needsPlayers = !!form.resource_id && isPlayerPriced(formRateCard) && !form.player_count;
 
   // Ask for browser-notification permission once
   useEffect(() => { ensureNotificationPermission(); }, []);
@@ -81,8 +81,7 @@ export default function SessionsListPage() {
   }, [active]);
 
   const openStart = (resource_id) => {
-    const pcs = playerCountsFor(resource_id);
-    setForm({ customer_name: "", customer_phone: "", resource_id, player_count: pcs[0] || 1, start_time: toLocalInput(), membership_card: null });
+    setForm({ customer_name: "", customer_phone: "", resource_id, player_count: null, start_time: toLocalInput(), membership_card: null });
     setOpenNew(true);
   };
 
@@ -92,11 +91,12 @@ export default function SessionsListPage() {
   // One key per click on Start: a double click, a retry or a second device can't start the session twice
   const start = async ({ idempotencyKey }) => {
     if (!form.customer_name || !form.resource_id) return toast.error("Customer name & resource required");
+    if (needsPlayers) return toast.error("Choose the number of players");
     const payload = {
       customer_name: form.customer_name,
       customer_phone: form.customer_phone,
       resource_id: form.resource_id,
-      player_count: Number(form.player_count) || 1,
+      player_count: playerCountToSend(formRateCard, form.player_count),
       start_time: fromLocalInput(form.start_time),
       // Optional: omitted entirely for non-members so the request is exactly as before
       ...(form.membership_card ? { membership_card_id: form.membership_card.id } : {}),
@@ -221,25 +221,13 @@ export default function SessionsListPage() {
             <div><Label>Phone</Label><Input value={form.customer_phone} onChange={e => setForm(f => ({ ...f, customer_phone: e.target.value }))} data-testid="new-cust-phone"/></div>
             <div>
               <Label>Resource</Label>
-              <Select value={form.resource_id} onValueChange={v => {
-                const pcs = playerCountsFor(v);
-                setForm(f => ({ ...f, resource_id: v, player_count: pcs[0] || 1 }));
-              }}>
+              <Select value={form.resource_id} onValueChange={v => setForm(f => ({ ...f, resource_id: v, player_count: null }))}>
                 <SelectTrigger data-testid="new-cust-resource"><SelectValue placeholder="Select"/></SelectTrigger>
                 <SelectContent>{resources.filter(r => !r.active).map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div>
-              <Label>Number of Players</Label>
-              <Select value={String(form.player_count)} onValueChange={v => setForm(f => ({ ...f, player_count: Number(v) }))}>
-                <SelectTrigger data-testid="new-cust-players"><SelectValue/></SelectTrigger>
-                <SelectContent>
-                  {playerCountsFor(form.resource_id).map(pc => (
-                    <SelectItem key={pc} value={String(pc)}>{pc} player{pc > 1 ? "s" : ""}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <PlayerCountField rateCard={formRateCard} value={form.player_count} startTime={form.start_time}
+                              onChange={(n) => setForm(f => ({ ...f, player_count: n }))} testId="new-cust-players" />
             <div>
               <Label>Entry Time (can backdate)</Label>
               <DateTimePicker value={form.start_time} onChange={(v) => setForm((f) => ({ ...f, start_time: v }))} data-testid="new-cust-start"/>
@@ -247,7 +235,7 @@ export default function SessionsListPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" disabled={starting} onClick={() => setOpenNew(false)}>Cancel</Button>
-            <SubmitButton data-testid="new-cust-start-btn">
+            <SubmitButton disabled={needsPlayers} data-testid="new-cust-start-btn">
               <Lightning size={16} weight="fill" /> Start
             </SubmitButton>
           </DialogFooter>

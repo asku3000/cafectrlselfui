@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import PlayerCountField from "../components/PlayerCountField";
+import { isPlayerPriced, playerCountToSend } from "../lib/playerPricing";
 import { useLoadStatus } from "../lib/async/useAsyncData";
 import PageState from "../components/async/PageState";
 import AsyncForm, { SubmitButton } from "../components/async/AsyncForm";
@@ -37,7 +39,7 @@ export default function SessionDetailPage() {
   const [endGameOpen, setEndGameOpen] = useState(null);
   const [billingOpen, setBillingOpen] = useState(false);
 
-  const [newGame, setNewGame] = useState({ resource_id: "", player_count: 1, start_time: toLocalInput() });
+  const [newGame, setNewGame] = useState({ resource_id: "", player_count: null, start_time: toLocalInput() });
   const [endTime, setEndTime] = useState(toLocalInput());
   const [adjustment, setAdjustment] = useState(0);
   const [payments, setPayments] = useState([{ mode: "cash", amount: 0 }]);
@@ -83,13 +85,13 @@ export default function SessionDetailPage() {
   };
   const { reload: load, ...status } = useLoadStatus(fetchPage, [id], { pollMs: 20000 });
 
-  const playerCountsFor = (rid) => {
+  const rateCardOf = (rid) => {
     const r = resources.find((x) => x.id === rid);
-    if (!r) return [1];
-    const rc = rateCards.find((c) => c.id === r.rate_card_id);
-    const pcs = Array.isArray(rc?.player_counts) ? rc.player_counts.map(Number).filter((n) => Number.isFinite(n)) : [];
-    return pcs.length ? Array.from(new Set(pcs)).sort((a, b) => a - b) : [1];
+    return r ? rateCards.find((c) => c.id === r.rate_card_id) || null : null;
   };
+  const newGameRateCard = rateCardOf(newGame.resource_id);
+  // Same rule as starting a session: player-priced resources need an explicit count
+  const newGameNeedsPlayers = !!newGame.resource_id && isPlayerPriced(newGameRateCard) && !newGame.player_count;
 
 // Upgraded to accept an optional custom end-time
   const previewBill = async (customEndTime = null) => {
@@ -164,9 +166,10 @@ export default function SessionDetailPage() {
   
   const addGame = async ({ idempotencyKey }) => {
     if (!newGame.resource_id) return toast.error("Pick a resource");
+    if (newGameNeedsPlayers) return toast.error("Choose the number of players");
     await api.post(`/sessions/${id}/games`, {
       resource_id: newGame.resource_id,
-      player_count: Number(newGame.player_count) || 1,
+      player_count: playerCountToSend(newGameRateCard, newGame.player_count),
       start_time: fromLocalInput(newGame.start_time),
     }, withIdempotency(idempotencyKey));
     setAddGameOpen(false); load(); toast.success("Game added");
@@ -270,7 +273,7 @@ const searchOptions = currentList.map(it => ({
               <Link to={`/audit-log?entity_type=SESSION&entity_id=${id}`}>History</Link>
             </Button>
           )}
-          {!isBilled && !isCancelled && <Button variant="outline" disabled={sessionBusy} onClick={() => { setNewGame({ resource_id: "", player_count: 1, start_time: toLocalInput() }); setAddGameOpen(true); }} data-testid="add-game-btn"><Plus size={16}/> Add Game</Button>}
+          {!isBilled && !isCancelled && <Button variant="outline" disabled={sessionBusy} onClick={() => { setNewGame({ resource_id: "", player_count: null, start_time: toLocalInput() }); setAddGameOpen(true); }} data-testid="add-game-btn"><Plus size={16}/> Add Game</Button>}
           {!isBilled && !isCancelled && canBill && <AsyncButton lockKey={LOCK} onClick={() => previewBill(null)} data-testid="bill-btn"><Receipt size={16}/> Bill</AsyncButton>}
           {!isBilled && !isCancelled && isAdmin && (
             <ConfirmAction
@@ -449,25 +452,13 @@ const searchOptions = currentList.map(it => ({
           <div className="space-y-4">
             <div>
               <Label>Resource</Label>
-              <Select value={newGame.resource_id} onValueChange={v => {
-                const pcs = playerCountsFor(v);
-                setNewGame(f => ({ ...f, resource_id: v, player_count: pcs[0] || 1 }));
-              }}>
+              <Select value={newGame.resource_id} onValueChange={v => setNewGame(f => ({ ...f, resource_id: v, player_count: null }))}>
                 <SelectTrigger data-testid="add-game-res"><SelectValue placeholder="Select"/></SelectTrigger>
                 <SelectContent>{availableResources.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div>
-              <Label>Number of Players</Label>
-              <Select value={String(newGame.player_count)} onValueChange={v => setNewGame(f => ({ ...f, player_count: Number(v) }))}>
-                <SelectTrigger data-testid="add-game-players"><SelectValue/></SelectTrigger>
-                <SelectContent>
-                  {playerCountsFor(newGame.resource_id).map(pc => (
-                    <SelectItem key={pc} value={String(pc)}>{pc} player{pc > 1 ? "s" : ""}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <PlayerCountField rateCard={newGameRateCard} value={newGame.player_count} startTime={newGame.start_time}
+                              onChange={(n) => setNewGame(f => ({ ...f, player_count: n }))} testId="add-game-players" />
             <div>
               <Label>Start Time</Label>
               <DateTimePicker value={newGame.start_time} onChange={(v) => setNewGame((f) => ({ ...f, start_time: v }))} data-testid="add-game-start"/>
@@ -475,7 +466,7 @@ const searchOptions = currentList.map(it => ({
           </div>
           <DialogFooter>
             <Button variant="outline" disabled={sessionBusy} onClick={() => setAddGameOpen(false)}>Cancel</Button>
-            <SubmitButton data-testid="add-game-save">Add</SubmitButton>
+            <SubmitButton disabled={newGameNeedsPlayers} data-testid="add-game-save">Add</SubmitButton>
 
           </DialogFooter>
           </AsyncForm>
