@@ -8,7 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { Switch } from "../components/ui/switch";
-import { Plus, PencilSimple, IdentificationCard } from "@phosphor-icons/react";
+import { Plus, PencilSimple, IdentificationCard, ClockCounterClockwise } from "@phosphor-icons/react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
 const DEFAULT_COLOR = "#3B82F6";
@@ -153,7 +154,12 @@ export default function MembershipPlansPage() {
                   </div>
                   {!p.is_active && <div className="text-xs uppercase tracking-widest text-muted-foreground font-bold mt-1">Not on sale</div>}
                 </div>
-                <Button size="icon" variant="ghost" onClick={() => openEdit(p)} data-testid={`plan-edit-${p.id}`}><PencilSimple size={18}/></Button>
+                <div className="flex shrink-0">
+                  <Button size="icon" variant="ghost" asChild title="History" data-testid={`plan-history-${p.id}`}>
+                    <Link to={`/audit-log?entity_type=MEMBERSHIP_PLAN&entity_id=${p.id}`}><ClockCounterClockwise size={18}/></Link>
+                  </Button>
+                  <Button size="icon" variant="ghost" onClick={() => openEdit(p)} data-testid={`plan-edit-${p.id}`}><PencilSimple size={18}/></Button>
+                </div>
               </div>
               <div className="grid grid-cols-3 gap-2 text-center">
                 <Stat label="Pay" value={fmtPaise(p.load_amount_paise)} />

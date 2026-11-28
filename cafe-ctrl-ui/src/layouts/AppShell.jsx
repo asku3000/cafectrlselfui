@@ -7,7 +7,7 @@ import {
   HouseSimple, GameController, ClockCounterClockwise, Receipt, ChartBar,
   Users, Package, Storefront, SignOut, Sun, MoonStars, Gear, Lightning,
   List, X, // <-- Added List (Hamburger) and X (Close) icons
-  IdentificationCard, Wallet
+  IdentificationCard, Wallet, ClipboardText
 } from "@phosphor-icons/react";
 
 const NAV = [
@@ -23,6 +23,7 @@ const NAV = [
   { to: "/cafe-profile", label: "Cafe Profile", icon: Storefront, roles: ["CAFE_ADMIN"] },
   { to: "/customers", label: "Customers", icon: Users, roles: ["CAFE_ADMIN", "OPERATOR"] },
   { to: "/memberships", label: "Memberships", icon: Wallet, roles: ["CAFE_ADMIN", "OPERATOR"], perm: "memberships" },
+  { to: "/audit-log", label: "Audit Log", icon: ClipboardText, roles: ["CAFE_ADMIN"] },
 ];
 
 const SUPER_NAV = [

@@ -299,6 +299,11 @@ const searchOptions = currentList.map(it => ({
           <p className="text-muted-foreground mt-1">{sess.customer_phone || "—"} · started {fmtDateTime(sess.created_at)} · operator {sess.operator_name}</p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          {isAdmin && (
+            <Button variant="ghost" asChild data-testid="session-history-link">
+              <Link to={`/audit-log?entity_type=SESSION&entity_id=${id}`}>History</Link>
+            </Button>
+          )}
           {!isBilled && !isCancelled && <Button variant="outline" onClick={() => { setNewGame({ resource_id: "", player_count: 1, start_time: toLocalInput() }); setAddGameOpen(true); }} data-testid="add-game-btn"><Plus size={16}/> Add Game</Button>}
           {!isBilled && !isCancelled && canBill && <Button onClick={() => previewBill(null)} data-testid="bill-btn"><Receipt size={16}/> Bill</Button>}
           {!isBilled && !isCancelled && isAdmin && (
